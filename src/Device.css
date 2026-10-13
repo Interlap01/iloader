@@ -10,22 +10,16 @@
   border-radius: 14px;
   color: inherit;
   cursor: pointer;
-  transition:
-    border-color 0.2s ease,
-    background 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 
 .device-card:hover {
   border-color: var(--accent-primary);
 }
 
-.device-card.active:hover {
-  background: rgba(10, 132, 255, 0.2) !important;
-}
-
 .device-card.active {
   border-color: var(--accent-primary);
-  background: rgba(10, 132, 255, 0.15) !important;
+  background: rgba(10, 132, 255, 0.15);
 }
 
 .device-meta {

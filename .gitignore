@@ -25,5 +25,3 @@ dist-ssr
 .zsign_cache
 keys
 *.mobileprovision
-
-dockerfile

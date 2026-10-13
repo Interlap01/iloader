@@ -7,10 +7,6 @@
   width: 100%;
 }
 
-.operation-header h2 {
-  margin-top: 0;
-}
-
 .operation-content-container {
   display: flex;
   flex-direction: column;
@@ -49,15 +45,11 @@
   margin: 0.5rem 0 0;
   font-family: "SF Mono", "Menlo", monospace;
   font-size: 0.85rem;
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .operation-step-internal {
   flex-shrink: 1;
   text-align: left;
-  overflow-x: auto;
-  flex-grow: 1;
 }
 
 .operation-step-internal p {
@@ -92,7 +84,6 @@
   from {
     transform: rotate(0deg);
   }
-
   to {
     transform: rotate(360deg);
   }
@@ -111,7 +102,7 @@
 }
 
 .operation-header {
-  margin-bottom: 1em;
+  margin-bottom: 2em;
 }
 
 .operation-header p {
@@ -122,19 +113,4 @@
 .operation-success-message {
   font-weight: 600;
   color: rgb(241, 212, 115);
-}
-
-.operation-more-details {
-  cursor: pointer;
-  padding-top: 0.25rem;
-  text-decoration: underline;
-}
-
-.operation-suggestions {
-  padding: 0rem 0 1rem 0;
-}
-
-.operation-suggestions ul {
-  margin: 0 0 0.5rem 0;
-  padding-left: 2rem;
 }

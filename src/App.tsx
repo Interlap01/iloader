@@ -25,14 +25,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdates } from "./update";
 import logo from "./iloader.svg";
 import { GlassCard } from "./components/GlassCard";
-import { useTranslation } from "react-i18next";
-import { usePlatform } from "./PlatformContext";
 
 function App() {
-  const { t } = useTranslation();
-
   const [operationState, setOperationState] = useState<OperationState | null>(
-    null,
+    null
   );
   const [loggedInAs, setLoggedInAs] = useState<string | null>(null);
   const [selectedDevice, setSelectedDevice] = useState<DeviceInfo | null>(null);
@@ -40,25 +36,10 @@ function App() {
     null | "certificates" | "appids" | "pairing"
   >(null);
   const [version, setVersion] = useState<string>("");
-
+  const [platform, setPlatform] = useState<"mac" | "windows" | "linux">(
+    "windows"
+  );
   const refreshDevicesRef = useRef<(() => void) | null>(null);
-
-  const [noKeyringAvailable, setNoKeyringAvailable] = useState<boolean>(false);
-  const { platform } = usePlatform();
-
-  const checkKeyring = useCallback(async () => {
-    try {
-      let available = await invoke<boolean>("keyring_available");
-      setNoKeyringAvailable(!available);
-    } catch (e) {
-      console.error("Unable to check keyring availability:", e);
-      setNoKeyringAvailable(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    checkKeyring();
-  }, [checkKeyring]);
 
   useEffect(() => {
     const fetchVersion = async () => {
@@ -72,19 +53,31 @@ function App() {
     checkForUpdates();
   }, []);
 
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    const ua = navigator.userAgent || "";
+    if (ua.includes("Mac")) {
+      setPlatform("mac");
+    } else if (ua.includes("Win")) {
+      setPlatform("windows");
+    } else if (ua.includes("Linux")) {
+      setPlatform("linux");
+    }
+  }, []);
+
   const shortcutLabel = useCallback(
     (mac: string, windows: string, linux?: string) => {
       if (platform === "mac") return mac;
       if (platform === "linux") return linux ?? windows;
       return windows;
     },
-    [platform],
+    [platform]
   );
 
   const startOperation = useCallback(
     async (
       operation: Operation,
-      params: { [key: string]: any },
+      params: { [key: string]: any }
     ): Promise<void> => {
       setOperationState({
         current: operation,
@@ -122,7 +115,7 @@ function App() {
               }
               return old;
             });
-          },
+          }
         );
         try {
           await invoke(operation.id + "_operation", params);
@@ -134,24 +127,23 @@ function App() {
         }
       });
     },
-    [setOperationState],
+    [setOperationState]
   );
 
   const ensuredLoggedIn = useCallback((): boolean => {
     if (loggedInAs) return true;
-    toast.error(t("app.must_be_logged_in"));
+    toast.error("You must be logged in!");
     return false;
-  }, [loggedInAs, t]);
+  }, [loggedInAs]);
 
   const ensureSelectedDevice = useCallback((): boolean => {
     if (selectedDevice) return true;
-    toast.error(t("app.must_select_device"));
+    toast.error("You must select a device!");
     return false;
-  }, [selectedDevice, t]);
+  }, [selectedDevice]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.key === undefined) return;
       const key = event.key.toLowerCase();
       const primaryPressed = platform === "mac" ? event.metaKey : event.ctrlKey;
       if (!primaryPressed) return;
@@ -183,30 +175,15 @@ function App() {
       <header className="workspace-header">
         <div className="header-left">
           <div className="title-block">
-            <img src={logo} alt={t("app.logo_alt")} className="logo" />
+            <img src={logo} alt="iloader logo" className="logo" />
             <div>
               <h1 className="title">iloader</h1>
-              <p className="subtitle">{t("subtitle")}</p>
+              <p className="subtitle">Sideloading Companion</p>
             </div>
           </div>
-          <span className="version-pill">
-            {t("version")} {version}
-          </span>
+          <span className="version-pill">Version {version}</span>
         </div>
         <div className="header-actions">
-          <button
-            className="toolbar-button"
-            onClick={async () => {
-              try {
-                await openUrl("https://github.com/sponsors/nab138");
-              } catch (error) {
-                console.error("Failed to open GitHub link", error);
-                toast.error(t("app.open_github_failed"));
-              }
-            }}
-          >
-            ❤️ {t("app.donate")}
-          </button>
           <button
             className="toolbar-button"
             onClick={async () => {
@@ -214,11 +191,11 @@ function App() {
                 await openUrl("https://github.com/nab138/iloader");
               } catch (error) {
                 console.error("Failed to open GitHub link", error);
-                toast.error(t("app.open_github_failed"));
+                toast.error("Unable to open GitHub link");
               }
             }}
           >
-            {t("app.github")}
+            GitHub
           </button>
         </div>
       </header>
@@ -226,22 +203,17 @@ function App() {
         <aside className="workspace-sidebar">
           <section className="workspace-section">
             <div className="section-header">
-              <p className="section-label">{t("app.section_account")}</p>
-              {/* here to ensure spacing and stuff is correct */}
+              <p className="section-label">Account</p>
               <span className="section-hint placeholder" aria-hidden="true">
                 Placeholder
               </span>
             </div>
             <GlassCard className="panel">
-              <AppleID
-                loggedInAs={loggedInAs}
-                setLoggedInAs={setLoggedInAs}
-                noKeyringAvailable={noKeyringAvailable}
-              />
+              <AppleID loggedInAs={loggedInAs} setLoggedInAs={setLoggedInAs} />
             </GlassCard>
           </section>
           <section className="workspace-section">
-            <p className="section-label">{t("app.section_management")}</p>
+            <p className="section-label">Management</p>
             <div className="workspace-list">
               <button
                 className="workspace-list-item"
@@ -250,7 +222,7 @@ function App() {
                   setOpenModal("pairing");
                 }}
               >
-                {t("app.manage_pairing_file")}{" "}
+                Manage Pairing File{" "}
                 <span aria-hidden="true">{shortcutLabel("⌘P", "Ctrl+P")}</span>
               </button>
               <button
@@ -259,7 +231,7 @@ function App() {
                   refreshDevicesRef.current?.();
                 }}
               >
-                {t("app.refresh_devices")}{" "}
+                Refresh Devices{" "}
                 <span aria-hidden="true">{shortcutLabel("⌘R", "Ctrl+R")}</span>
               </button>
               <button
@@ -269,7 +241,7 @@ function App() {
                   setOpenModal("certificates");
                 }}
               >
-                {t("app.certificates")}{" "}
+                Certificates{" "}
                 <span aria-hidden="true">
                   {shortcutLabel("⌘⇧C", "Ctrl+Shift+C")}
                 </span>
@@ -281,7 +253,7 @@ function App() {
                   setOpenModal("appids");
                 }}
               >
-                {t("app.app_ids")}{" "}
+                App IDs{" "}
                 <span aria-hidden="true">
                   {shortcutLabel("⌘⇧A", "Ctrl+Shift+A")}
                 </span>
@@ -292,13 +264,11 @@ function App() {
         <section className="workspace-content">
           <section className="workspace-section">
             <div className="section-header">
-              <p className="section-label">{t("app.devices")}</p>
+              <p className="section-label">Devices</p>
               <span className="section-hint">
                 {selectedDevice
-                  ? t("app.active_device", {
-                      name: `${selectedDevice.name} (${selectedDevice.version})`,
-                    })
-                  : t("app.select_device")}
+                  ? `Active: ${selectedDevice.name}`
+                  : "Select a device"}
               </span>
             </div>
             <GlassCard className="panel">
@@ -313,8 +283,8 @@ function App() {
           </section>
           <section className="workspace-section">
             <div className="section-header">
-              <p className="section-label">{t("app.installers")}</p>
-              <span className="section-hint">{t("app.choose_build")}</span>
+              <p className="section-label">Installers</p>
+              <span className="section-hint">Choose a build</span>
             </div>
             <GlassCard className="panel">
               <div className="action-row single-row">
@@ -324,13 +294,10 @@ function App() {
                     startOperation(installSideStoreOperation, {
                       nightly: false,
                       liveContainer: false,
-                    }).catch((e) => {
-                      console.log(e.type);
-                      console.error(e.message);
                     });
                   }}
                 >
-                  {t("app.sidestore_stable")}
+                  SideStore (Stable)
                 </button>
                 <button
                   onClick={() => {
@@ -338,13 +305,10 @@ function App() {
                     startOperation(installSideStoreOperation, {
                       nightly: true,
                       liveContainer: false,
-                    }).catch((e) => {
-                      console.log(e.type);
-                      console.error(e.message);
                     });
                   }}
                 >
-                  {t("app.sidestore_nightly")}
+                  SideStore (Nightly)
                 </button>
                 <button
                   onClick={() => {
@@ -352,13 +316,10 @@ function App() {
                     startOperation(installLiveContainerOperation, {
                       nightly: false,
                       liveContainer: true,
-                    }).catch((e) => {
-                      console.log(e.type);
-                      console.error(e.message);
                     });
                   }}
                 >
-                  {t("app.livecontainer_sidestore_stable")}
+                  LiveContainer + SideStore (Stable)
                 </button>
                 <button
                   onClick={() => {
@@ -366,54 +327,45 @@ function App() {
                     startOperation(installLiveContainerOperation, {
                       nightly: true,
                       liveContainer: true,
-                    }).catch((e) => {
-                      console.log(e.type);
-                      console.error(e.message);
                     });
                   }}
                 >
-                  {t("app.livecontainer_sidestore_nightly")}
+                  LiveContainer + SideStore (Nightly)
                 </button>
                 <button
                   onClick={async () => {
                     if (!ensuredLoggedIn() || !ensureSelectedDevice()) return;
                     let path = await openFileDialog({
                       multiple: false,
-                      filters: [
-                        { name: t("app.ipa_files"), extensions: ["ipa"] },
-                      ],
+                      filters: [{ name: "IPA Files", extensions: ["ipa"] }],
                     });
                     if (!path) return;
                     startOperation(sideloadOperation, {
                       appPath: path as string,
-                    }).catch((e) => {
-                      console.log(e.type);
-                      console.error(e.message);
                     });
                   }}
                 >
-                  {t("app.import_ipa")}
+                  Import IPA
                 </button>
               </div>
             </GlassCard>
           </section>
           <section className="workspace-section">
-            <p className="section-label">{t("app.settings")}</p>
+            <p className="section-label">Settings</p>
             <GlassCard className="panel settings-panel">
-              <Settings
-                ensureSelectedDevice={ensureSelectedDevice}
-                setSelectedDevice={setSelectedDevice}
-                platform={platform}
-                shortcutLabel={shortcutLabel}
-                checkKeyring={checkKeyring}
-              />
+              <Settings showHeading={false} />
             </GlassCard>
           </section>
           {operationState && (
-            <OperationView
-              operationState={operationState}
-              closeMenu={() => setOperationState(null)}
-            />
+            <section className="workspace-section">
+              <p className="section-label">Activity</p>
+              <GlassCard className="panel">
+                <OperationView
+                  operationState={operationState}
+                  closeMenu={() => setOperationState(null)}
+                />
+              </GlassCard>
+            </section>
           )}
         </section>
       </div>

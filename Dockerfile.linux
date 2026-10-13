@@ -1,0 +1,42 @@
+# Dockerfile for building iloader-cli for Linux
+FROM rust:bullseye
+
+# Install dependencies for iloader-cli
+# - libssl-dev: OpenSSL development files (for vendored-openssl)
+# - pkg-config: Required for finding system libraries
+# - libdbus-1-dev: D-Bus for keyring/secret-service
+# - libsecret-1-dev: GNOME keyring support
+# - libudev-dev: USB device support
+# Bullseye is kept for its glibc 2.31 so the binary runs on older distros.
+# Its LTS ended 2026-08-31: Debian moved it to archive.debian.org (the main
+# mirrors now 404 on security updates), and the Release files are past their
+# Valid-Until date, so apt must be told not to reject them.
+RUN sed -i 's|deb.debian.org|archive.debian.org|g' /etc/apt/sources.list \
+    && apt-get -o Acquire::Check-Valid-Until=false update && apt-get install -y \
+    libssl-dev \
+    pkg-config \
+    libdbus-1-dev \
+    libsecret-1-dev \
+    libudev-dev \
+    clang \
+    libclang-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy Cargo files first (for better caching)
+COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./
+
+# Copy the source and the vendored crate Cargo.toml references as ../vendored
+COPY src-tauri/src ./src
+COPY vendored /vendored
+
+# Build iloader-cli for Linux using locked dependencies. Stripped, link-time
+# optimised, one codegen unit: the same settings as ILOADER_CARGO_ENV in the
+# Makefile.
+ENV CARGO_PROFILE_RELEASE_STRIP=true \
+    CARGO_PROFILE_RELEASE_LTO=true \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+RUN cargo build --bin iloader-cli --release --no-default-features --features cli --locked
+
+# Output is at /app/target/release/iloader-cli

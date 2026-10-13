@@ -1,92 +1,64 @@
-use std::{path::PathBuf, sync::Mutex};
+use std::path::PathBuf;
 
 use crate::{
-    device::{DeviceInfoMutex, get_provider, get_provider_from_connection, get_usbmuxd},
-    error::AppError,
+    account::get_developer_session,
+    device::{get_provider, DeviceInfoMutex},
     operation::Operation,
-    pairing::{get_sidestore_info, place_file},
+    pairing::{get_sidestore_info, place_pairing},
 };
-use isideload::{
-    sideload::{application::SpecialApp, sideloader::Sideloader},
-    util::callbacks::MaxCertsCallbackBox,
-};
+use isideload::{sideload::sideload_app, SideloadConfiguration};
 use tauri::{AppHandle, Manager, State, Window};
 
-pub type SideloaderMutex = Mutex<Option<Sideloader<MaxCertsCallbackBox>>>;
-
-pub struct SideloaderGuard<'a> {
-    state: &'a SideloaderMutex,
-    sideloader: Option<Sideloader<MaxCertsCallbackBox>>,
-}
-
-impl<'a> SideloaderGuard<'a> {
-    pub fn take(state: &'a SideloaderMutex) -> Result<Self, AppError> {
-        let mut guard = state.lock().unwrap();
-        let sideloader = guard.take().ok_or(AppError::NotLoggedIn)?;
-        Ok(Self {
-            state,
-            sideloader: Some(sideloader),
-        })
-    }
-
-    pub fn get_mut(&mut self) -> &mut Sideloader<MaxCertsCallbackBox> {
-        self.sideloader
-            .as_mut()
-            .expect("Sideloader should be present")
-    }
-}
-
-impl Drop for SideloaderGuard<'_> {
-    fn drop(&mut self) {
-        let mut guard = self.state.lock().unwrap();
-        *guard = self.sideloader.take();
-    }
-}
-
 pub async fn sideload(
+    handle: AppHandle,
     device_state: State<'_, DeviceInfoMutex>,
-    sideloader_state: State<'_, SideloaderMutex>,
     app_path: String,
-) -> Result<Option<SpecialApp>, AppError> {
+) -> Result<(), String> {
     let device = {
         let device_lock = device_state.lock().unwrap();
         match &*device_lock {
             Some(d) => d.clone(),
-            None => return Err(AppError::NoDeviceSelected),
+            None => return Err("No device selected".to_string()),
         }
     };
 
-    let provider = get_provider(&device.info).await?;
+    let provider = get_provider(&device).await?;
 
-    let mut sideloader = SideloaderGuard::take(&sideloader_state)?;
+    let config = SideloadConfiguration::default()
+        .set_machine_name("iloader".to_string())
+        .set_store_dir(
+            handle
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("Failed to get app data dir: {:?}", e))?,
+        );
 
-    let special = sideloader
-        .get_mut()
-        .install_app(
-            &provider,
-            app_path.into(),
-            false,
-            None::<fn(f32) -> std::future::Ready<()>>,
-            Some(&device.pairing),
-        )
-        .await?;
+    let dev_session = get_developer_session().await.map_err(|e| e.to_string())?;
 
-    Ok(special)
+    sideload_app(&provider, &dev_session, app_path.into(), config)
+        .await
+        .map_err(|e| {
+            match e {
+                isideload::Error::Certificate(s) if s == "You have too many certificates!" => {
+                    "You have too many certificates. Revoke one by clicking \"Certificates\" and \"Revoke\".".to_string()
+                }
+                _ => e.to_string(),
+            }
+        })?;
+
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn sideload_operation(
+    handle: AppHandle,
     window: Window,
     device_state: State<'_, DeviceInfoMutex>,
-    sideloader_state: State<'_, SideloaderMutex>,
     app_path: String,
-) -> Result<(), AppError> {
+) -> Result<(), String> {
     let op = Operation::new("sideload".to_string(), &window);
     op.start("install")?;
-    op.fail_if_err(
-        "install",
-        sideload(device_state, sideloader_state, app_path).await,
-    )?;
+    op.fail_if_err("install", sideload(handle, device_state, app_path).await)?;
     op.complete("install")?;
     Ok(())
 }
@@ -96,24 +68,17 @@ pub async fn install_sidestore_operation(
     handle: AppHandle,
     window: Window,
     device_state: State<'_, DeviceInfoMutex>,
-    sideloader_state: State<'_, SideloaderMutex>,
     nightly: bool,
     live_container: bool,
-) -> Result<(), AppError> {
+) -> Result<(), String> {
     let op = Operation::new("install_sidestore".to_string(), &window);
     op.start("download")?;
     // TODO: Cache & check version to avoid re-downloading
     let (filename, url) = if live_container {
         if nightly {
-            (
-                "LiveContainerSideStore-Nightly.ipa",
-                "https://github.com/LiveContainer/LiveContainer/releases/download/nightly/LiveContainer+SideStore.ipa",
-            )
+            ("LiveContainerSideStore-Nightly.ipa", "https://github.com/LiveContainer/LiveContainer/releases/download/nightly/LiveContainer+SideStore.ipa")
         } else {
-            (
-                "LiveContainerSideStore.ipa",
-                "https://github.com/LiveContainer/LiveContainer/releases/latest/download/LiveContainer+SideStore.ipa",
-            )
+            ("LiveContainerSideStore.ipa", "https://github.com/LiveContainer/LiveContainer/releases/latest/download/LiveContainer+SideStore.ipa")
         }
     } else if nightly {
         (
@@ -130,7 +95,7 @@ pub async fn install_sidestore_operation(
     let dest = handle
         .path()
         .temp_dir()
-        .map_err(|e| AppError::Filesystem("Failed to get temp dir".into(), e.to_string()))?
+        .map_err(|e| format!("Failed to get temp dir: {:?}", e))?
         .join(filename);
     op.fail_if_err("download", download(url, &dest).await)?;
     op.move_on("download", "install")?;
@@ -138,42 +103,27 @@ pub async fn install_sidestore_operation(
         let device_guard = device_state.lock().unwrap();
         match &*device_guard {
             Some(d) => d.clone(),
-            None => return op.fail("install", AppError::NoDeviceSelected),
+            None => return op.fail("install", "No device selected".to_string()),
         }
     };
     op.fail_if_err(
         "install",
-        sideload(
-            device_state,
-            sideloader_state,
-            dest.to_string_lossy().to_string(),
-        )
-        .await,
+        sideload(handle, device_state, dest.to_string_lossy().to_string()).await,
     )?;
     op.move_on("install", "pairing")?;
     let sidestore_info = op.fail_if_err(
         "pairing",
-        get_sidestore_info(&device.info, live_container).await,
+        get_sidestore_info(device.clone(), live_container).await,
     )?;
     if let Some(info) = sidestore_info {
-        let mut usbmuxd = op.fail_if_err("pairing", get_usbmuxd().await)?;
-
-        let provider = op.fail_if_err(
-            "pairing",
-            get_provider_from_connection(&device.info, &mut usbmuxd).await,
-        )?;
-
         op.fail_if_err(
             "pairing",
-            place_file(device.pairing, &provider, info.bundle_id, info.path).await,
+            place_pairing(device, info.bundle_id, info.path).await,
         )?;
     } else {
         return op.fail(
             "pairing",
-            AppError::HouseArrest(
-                "SideStore's not found".into(),
-                "The device did not report SideStore's bundle ID as installed".into(),
-            ),
+            "Could not find SideStore's bundle ID".to_string(),
         );
     }
 
@@ -181,24 +131,21 @@ pub async fn install_sidestore_operation(
     Ok(())
 }
 
-pub async fn download(url: impl AsRef<str>, dest: &PathBuf) -> Result<(), AppError> {
+pub async fn download(url: impl AsRef<str>, dest: &PathBuf) -> Result<(), String> {
     let response = reqwest::get(url.as_ref())
         .await
-        .map_err(|e| AppError::Download(e.to_string()))?;
+        .map_err(|e| e.to_string())?;
     if !response.status().is_success() {
-        return Err(AppError::Download(format!(
+        return Err(format!(
             "Failed to download file: HTTP {}",
             response.status()
-        )));
+        ));
     }
 
-    let bytes = response
-        .bytes()
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    tokio::fs::write(dest, &bytes)
         .await
-        .map_err(|e| AppError::Download(e.to_string()))?;
-    tokio::fs::write(dest, &bytes).await.map_err(|e| {
-        AppError::Filesystem("Failed to write downloaded file".into(), e.to_string())
-    })?;
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }

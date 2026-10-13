@@ -1,16 +1,14 @@
-import { AppError } from "../errors";
-
 export type Operation = {
   id: string;
-  titleKey: string;
-  successMessageKey?: string;
-  successTitleKey?: string;
+  title: string;
+  successMessage?: string;
+  successTitle?: string;
   steps: OperationStep[];
 };
 
 export type OperationStep = {
   id: string;
-  titleKey: string;
+  title: string;
 };
 
 export type OperationState = {
@@ -19,7 +17,7 @@ export type OperationState = {
   started: string[];
   failed: {
     stepId: string;
-    extraDetails: AppError;
+    extraDetails: string;
   }[];
 };
 
@@ -31,60 +29,61 @@ type OperationInfoUpdate = {
 type OperationFailedUpdate = {
   updateType: "failed";
   stepId: string;
-  extraDetails: AppError;
+  extraDetails: string;
 };
 
 export type OperationUpdate = OperationInfoUpdate | OperationFailedUpdate;
 
 export const installSideStoreOperation: Operation = {
   id: "install_sidestore",
-  titleKey: "operations.install_sidestore_title",
-  successTitleKey: "operations.install_sidestore_success_title",
-  successMessageKey: "operations.install_sidestore_success_message",
+  title: "Installing SideStore",
+  successTitle: "SideStore Installed!",
+  successMessage: "Open SideStore and refresh it to complete the installation!",
   steps: [
     {
       id: "download",
-      titleKey: "operations.install_sidestore_step_download",
+      title: "Download SideStore",
     },
     {
       id: "install",
-      titleKey: "operations.install_sidestore_step_install",
+      title: "Sign & Install SideStore",
     },
     {
       id: "pairing",
-      titleKey: "operations.install_sidestore_step_pairing",
+      title: "Place Pairing File",
     },
   ],
 };
 
 export const installLiveContainerOperation: Operation = {
   id: "install_sidestore",
-  titleKey: "operations.install_livecontainer_title",
-  successTitleKey: "operations.install_livecontainer_success_title",
-  successMessageKey: "operations.install_livecontainer_success_message",
+  title: "Installing LiveContainer+SideStore",
+  successTitle: "LiveContainer+SideStore Installed!",
+  successMessage:
+    'To complete the installation, open LiveContainer, choose settings, and click "Import Certificate From SideStore." Then, choose apps, click the sidestore icon, and refresh LiveContainer.',
   steps: [
     {
       id: "download",
-      titleKey: "operations.install_livecontainer_step_download",
+      title: "Download SideStore+LiveContainer",
     },
     {
       id: "install",
-      titleKey: "operations.install_livecontainer_step_install",
+      title: "Sign & Install SideStore+LiveContainer",
     },
     {
       id: "pairing",
-      titleKey: "operations.install_livecontainer_step_pairing",
+      title: "Place Pairing File",
     },
   ],
 };
 
 export const sideloadOperation = {
   id: "sideload",
-  titleKey: "operations.sideload_title",
+  title: "Installing App",
   steps: [
     {
       id: "install",
-      titleKey: "operations.sideload_step_install",
+      title: "Sign & Install App",
     },
   ],
 };

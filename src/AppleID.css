@@ -82,7 +82,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
-  padding-bottom: 0.75rem;
+  padding: 0.75rem 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 
@@ -108,7 +108,6 @@
   font-size: 0.95rem;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
-  transition: filter 0.2s ease;
 }
 
 .action-button.primary {
@@ -124,7 +123,7 @@
 }
 
 .action-button:hover {
-  filter: brightness(1.25);
+  filter: brightness(1.05);
 }
 
 .add-account {
@@ -140,58 +139,4 @@
 
 .add-account:hover {
   color: #fff;
-}
-
-.certs-see {
-  color: var(--text-muted);
-  text-decoration: underline;
-  cursor: pointer;
-  margin-bottom: 0.25rem;
-}
-
-.certs-buttons {
-  margin-top: 1.25rem;
-  display: flex;
-  gap: 0.75rem;
-}
-
-.operation-header h2 {
-  margin-top: 0;
-}
-
-.cert-header {
-  margin-top: 0;
-}
-
-.certs-desc {
-  margin: 0;
-}
-
-.certs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.cert-item {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  border-radius: 8px;
-  background-color: var(--glass-surface);
-  padding: 0.5rem;
-  border: 1px solid var(--glass-border);
-  cursor: pointer;
-}
-
-.cert-item input {
-  pointer-events: none;
-}
-
-.cert-item label {
-  pointer-events: none;
-}
-
-.credentials-warning {
-  margin: 0;
 }

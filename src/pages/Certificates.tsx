@@ -2,10 +2,8 @@ import "./Certificates.css";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useError } from "../ErrorContext";
-import { useTranslation } from "react-i18next";
 
-export type Certificate = {
+type Certificate = {
   name: string;
   certificateId: string;
   serialNumber: string;
@@ -14,11 +12,9 @@ export type Certificate = {
 };
 
 export const Certificates = () => {
-  const { t } = useTranslation();
   const [certificates, setCertificates] = useState<Certificate[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const loadingRef = useRef<boolean>(false);
-  const { err } = useError();
 
   const loadCertificates = useCallback(async () => {
     if (loadingRef.current) return;
@@ -31,11 +27,11 @@ export const Certificates = () => {
       loadingRef.current = false;
     };
     toast.promise(promise, {
-      loading: t("certificates.loading"),
-      success: t("certificates.loaded_success"),
-      error: (e) => err(t("certificates.failed_load"), e),
+      loading: "Loading certificates...",
+      success: "Certificates loaded successfully!",
+      error: (e) => "Failed to load certificates: " + e,
     });
-  }, [setCertificates, t]);
+  }, [setCertificates]);
 
   const revokeCertificate = useCallback(
     async (serialNumber: string) => {
@@ -44,12 +40,12 @@ export const Certificates = () => {
       });
       promise.then(loadCertificates);
       toast.promise(promise, {
-        loading: t("certificates.revoking"),
-        success: t("certificates.revoked_success"),
-        error: (e) => err(t("certificates.failed_revoke"), e),
+        loading: "Revoking certificate...",
+        success: "Certificate revoked successfully!",
+        error: (e) => "Failed to revoke certificate: " + e,
       });
     },
-    [setCertificates, loadCertificates, t],
+    [setCertificates, loadCertificates]
   );
 
   useEffect(() => {
@@ -58,20 +54,22 @@ export const Certificates = () => {
 
   return (
     <>
-      <h2>{t("certificates.manage")}</h2>
+      <h2>Manage Certificates</h2>
       {certificates.length === 0 ? (
-        <div>{loading ? t("certificates.loading") : t("certificates.none_found")}</div>
+        <div>
+          {loading ? "Loading certificates..." : "No certificates found."}
+        </div>
       ) : (
         <div className="card">
           <div className="certificate-table-container">
             <table className="certificate-table">
               <thead>
                 <tr className="certificate-item">
-                  <th className="cert-item-part">{t("certificates.name")}</th>
-                  <th className="cert-item-part">{t("certificates.serial_number")}</th>
-                  <th className="cert-item-part">{t("certificates.machine_name")}</th>
-                  <th className="cert-item-part">{t("certificates.machine_id")}</th>
-                  <th>{t("certificates.revoke")}</th>
+                  <th className="cert-item-part">Name</th>
+                  <th className="cert-item-part">Serial Number</th>
+                  <th className="cert-item-part">Machine Name</th>
+                  <th className="cert-item-part">Machine ID</th>
+                  <th>Revoke</th>
                 </tr>
               </thead>
               <tbody>
@@ -89,11 +87,9 @@ export const Certificates = () => {
                     <td className="cert-item-part">{cert.machineId}</td>
                     <td
                       className="cert-item-revoke"
-                      role="button"
-                      tabIndex={0}
                       onClick={() => revokeCertificate(cert.serialNumber)}
                     >
-                      {t("certificates.revoke")}
+                      Revoke
                     </td>
                   </tr>
                 ))}
@@ -103,11 +99,11 @@ export const Certificates = () => {
         </div>
       )}
       <button
-        style={{ marginTop: "1em", width: "100%" }}
+        style={{ marginTop: "1em" }}
         onClick={loadCertificates}
         disabled={loading}
       >
-        {t("common.refresh")}
+        Refresh
       </button>
     </>
   );
