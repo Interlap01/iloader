@@ -68,15 +68,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Pinned to 3.x: openssl-sys rejects OpenSSL 4, which choco now
-          # installs by default. 3.5 is the long-term support line.
-          choco install openssl --version 3.5.4 --no-progress -y
+          # The newest OpenSSL 3.5 (the long-term support line; openssl-sys
+          # rejects OpenSSL 4) from the installer's maker, checked against the
+          # SHA-256 it publishes. choco is not used: it installs 4.x by
+          # default, and its pinned 3.x packages point at installers the
+          # maker has since removed.
+          read -r url sum < <(curl -fsSL https://raw.githubusercontent.com/slproweb/opensslhashes/master/win32_openssl_hashes.json | python -c '
+          import json, re, sys
+          files = json.load(sys.stdin)["files"]
+          name = max((n for n in files if re.fullmatch(r"Win64OpenSSL-3_5_\d+\.msi", n)), key=lambda n: int(n.split("_")[2].split(".")[0]))
+          print(files[name]["url"], files[name]["sha256"])')
+          echo "OpenSSL installer: $url"
+          curl -fsSL -o openssl.msi "$url"
+          echo "$sum  openssl.msi" | sha256sum -c -
+          powershell -NoProfile -Command "\$p = Start-Process msiexec.exe -ArgumentList '/i','openssl.msi','/qn','/norestart' -Wait -PassThru; exit \$p.ExitCode"
+          rm openssl.msi
           # The install folder differs between installer versions (OpenSSL,
-          # OpenSSL-Win64): take whichever holds the static x64 /MT libs.
-          static=$(find /c/Program\ Files/OpenSSL* /c/OpenSSL* -iname 'libssl_static.lib' 2>/dev/null | grep -i '/x64/MT/' | head -1 || true)
+          # OpenSSL-Win64), and the image may carry an OpenSSL of its own:
+          # take the 3.5 install that holds the static x64 /MT libs.
+          static=""
+          while IFS= read -r candidate; do
+            r=${candidate%%/[Ll][Ii][Bb]/*}
+            if grep -qE 'OPENSSL_VERSION_STR "3\.5\.' "$r/include/openssl/opensslv.h" 2>/dev/null; then static=$candidate; break; fi
+          done < <(find /c/Program\ Files/OpenSSL* /c/OpenSSL* -iname 'libssl_static.lib' 2>/dev/null | grep -i '/x64/MT/' || true)
           if [ -z "$static" ]; then
-            echo "::error::no static x64 /MT OpenSSL libs found"
+            echo "::error::no OpenSSL 3.5 with static x64 /MT libs found"
             ls -d /c/Program\ Files/OpenSSL* /c/OpenSSL* 2>/dev/null || true
+            grep -H 'OPENSSL_VERSION_STR' /c/Program\ Files/OpenSSL*/include/openssl/opensslv.h 2>/dev/null || true
             find /c/Program\ Files/OpenSSL* /c/OpenSSL* -maxdepth 4 -iname '*.lib' 2>/dev/null | head -40 || true
             exit 1
           fi
