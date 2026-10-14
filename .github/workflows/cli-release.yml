@@ -68,11 +68,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          choco install openssl --no-progress -y >/dev/null
-          root="/c/Program Files/OpenSSL-Win64"
-          lib=$(dirname "$(find "$root/lib" -iname 'libssl_static.lib' | grep -i '/x64/MT/' | head -1)")
-          [ -n "$lib" ] && [ "$lib" != "." ] || { echo "::error::no static OpenSSL libs under $root/lib"; find "$root/lib" -maxdepth 3; exit 1; }
-          export OPENSSL_DIR="C:/Program Files/OpenSSL-Win64"
+          choco install openssl --no-progress -y
+          # The install folder differs between installer versions (OpenSSL,
+          # OpenSSL-Win64): take whichever holds the static x64 /MT libs.
+          static=$(find /c/Program\ Files/OpenSSL* /c/OpenSSL* -iname 'libssl_static.lib' 2>/dev/null | grep -i '/x64/MT/' | head -1 || true)
+          if [ -z "$static" ]; then
+            echo "::error::no static x64 /MT OpenSSL libs found"
+            ls -d /c/Program\ Files/OpenSSL* /c/OpenSSL* 2>/dev/null || true
+            find /c/Program\ Files/OpenSSL* /c/OpenSSL* -maxdepth 4 -iname '*.lib' 2>/dev/null | head -40 || true
+            exit 1
+          fi
+          lib=$(dirname "$static")
+          root=${lib%%/[Ll][Ii][Bb]/*}
+          echo "OpenSSL: $root, libs: $lib"
+          export OPENSSL_DIR="$(cygpath -m "$root")"
           export OPENSSL_LIB_DIR="$(cygpath -m "$lib")"
           export OPENSSL_LIBS="libssl_static:libcrypto_static" OPENSSL_STATIC=1 OPENSSL_NO_VENDOR=1
           export CARGO_PROFILE_RELEASE_STRIP=true CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
