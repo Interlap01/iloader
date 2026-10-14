@@ -1,0 +1,120 @@
+# Builds iloader-cli for Linux and Windows when a cli-vN tag is pushed, and
+# attaches both to a draft release cli-vN. The macOS binaries are signed and
+# notarized on a Mac and uploaded to the same draft, which then gets its
+# manifest.json and is published.
+#
+# Run by hand (workflow_dispatch) with a build number to try the builds
+# without a tag; the binaries are then only kept as workflow artifacts.
+
+name: cli release
+
+on:
+  push:
+    tags: ['cli-v*']
+  workflow_dispatch:
+    inputs:
+      build:
+        description: release number to stamp into --version
+        required: true
+        default: '0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            os: ubuntu-latest
+            asset: iloader-cli-linux-amd64
+          - platform: windows-amd64
+            os: windows-latest
+            asset: iloader-cli-windows-amd64.exe
+    env:
+      ILOADER_CLI_BUILD: ${{ github.event_name == 'push' && github.ref_name || inputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build number
+        shell: bash
+        run: |
+          set -euo pipefail
+          n="${ILOADER_CLI_BUILD#cli-v}"
+          [[ "$n" =~ ^[0-9]+$ ]] || { echo "::error::build '$ILOADER_CLI_BUILD' is not cli-vN or a number"; exit 1; }
+          echo "ILOADER_CLI_BUILD=$n" >> "$GITHUB_ENV"
+
+      # The same Docker image as a local `make build-cli-linux-docker`: Debian
+      # bullseye, so the binary runs on glibc 2.31 and newer.
+      - name: build (linux)
+        if: matrix.platform == 'linux-amd64'
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --build-arg ILOADER_CLI_BUILD="$ILOADER_CLI_BUILD" \
+            -f Dockerfile.linux -t iloader-cli-linux .
+          mkdir -p out
+          docker run --rm -v "$PWD/out:/out" iloader-cli-linux cp /app/target/release/iloader-cli /out/
+          cp out/iloader-cli "${{ matrix.asset }}"
+
+      # Windows links OpenSSL statically from the full Win64 install: the
+      # vendored openssl-src build produces signatures iOS rejects there.
+      - name: build (windows)
+        if: matrix.platform == 'windows-amd64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          choco install openssl --no-progress -y >/dev/null
+          root="/c/Program Files/OpenSSL-Win64"
+          lib=$(dirname "$(find "$root/lib" -iname 'libssl_static.lib' | grep -i '/x64/MT/' | head -1)")
+          [ -n "$lib" ] && [ "$lib" != "." ] || { echo "::error::no static OpenSSL libs under $root/lib"; find "$root/lib" -maxdepth 3; exit 1; }
+          export OPENSSL_DIR="C:/Program Files/OpenSSL-Win64"
+          export OPENSSL_LIB_DIR="$(cygpath -m "$lib")"
+          export OPENSSL_LIBS="libssl_static:libcrypto_static" OPENSSL_STATIC=1 OPENSSL_NO_VENDOR=1
+          export CARGO_PROFILE_RELEASE_STRIP=true CARGO_PROFILE_RELEASE_LTO=true CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+          cd src-tauri
+          cargo build --bin iloader-cli --release --no-default-features --features cli --locked
+          cp target/release/iloader-cli.exe "../${{ matrix.asset }}"
+
+      - name: check --version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = linux-amd64 ]; then
+            out=$(docker run --rm -v "$PWD:/x" iloader-cli-linux "/x/${{ matrix.asset }}" --version)
+          else
+            out=$("./${{ matrix.asset }}" --version)
+          fi
+          echo "$out"
+          echo "$out" | grep -q "build $ILOADER_CLI_BUILD protocol " || { echo "::error::--version does not report build $ILOADER_CLI_BUILD"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  draft:
+    name: draft release
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: attach to draft cli release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --title "iloader-cli $TAG" \
+              --notes "iloader-cli $TAG. Binaries for Linux, Windows and macOS, and manifest.json."
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber

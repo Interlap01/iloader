@@ -27,14 +27,18 @@ WORKDIR /app
 # Copy Cargo files first (for better caching)
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./
 
-# Copy the source and the vendored crate Cargo.toml references as ../vendored
+# Copy the source and the vendored crate Cargo.toml references as ../vendored.
+# build.rs stamps the release number into `iloader-cli --version`.
+COPY src-tauri/build.rs ./build.rs
 COPY src-tauri/src ./src
 COPY vendored /vendored
 
 # Build iloader-cli for Linux using locked dependencies. Stripped, link-time
 # optimised, one codegen unit: the same settings as ILOADER_CARGO_ENV in the
-# Makefile.
-ENV CARGO_PROFILE_RELEASE_STRIP=true \
+# Makefile. ILOADER_CLI_BUILD is the release number (cli-vN); 0 for local builds.
+ARG ILOADER_CLI_BUILD=0
+ENV ILOADER_CLI_BUILD=${ILOADER_CLI_BUILD} \
+    CARGO_PROFILE_RELEASE_STRIP=true \
     CARGO_PROFILE_RELEASE_LTO=true \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 RUN cargo build --bin iloader-cli --release --no-default-features --features cli --locked

@@ -196,10 +196,23 @@ impl Output {
 
 }
 
+/// `iloader-cli --version` prints "iloader-cli build N protocol P (iloader X)".
+/// Hosts parse the build and the protocol from it. The protocol is the
+/// contract with the host that runs the CLI (arguments and the JSON lines on
+/// stdout): bump it on any change a host would have to know about, since a
+/// host only runs a downloaded CLI whose protocol it speaks.
+const CLI_VERSION: &str = concat!(
+    "build ",
+    env!("ILOADER_CLI_BUILD"),
+    " protocol 1 (iloader ",
+    env!("CARGO_PKG_VERSION"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(name = "iloader-cli")]
 #[command(about = "Sideload iOS apps with your Apple ID", long_about = None)]
-#[command(version)]
+#[command(version = CLI_VERSION)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
