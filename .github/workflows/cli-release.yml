@@ -68,7 +68,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          choco install openssl --no-progress -y
+          # Pinned to 3.x: openssl-sys rejects OpenSSL 4, which choco now
+          # installs by default. 3.5 is the long-term support line.
+          choco install openssl --version 3.5.4 --no-progress -y
           # The install folder differs between installer versions (OpenSSL,
           # OpenSSL-Win64): take whichever holds the static x64 /MT libs.
           static=$(find /c/Program\ Files/OpenSSL* /c/OpenSSL* -iname 'libssl_static.lib' 2>/dev/null | grep -i '/x64/MT/' | head -1 || true)
