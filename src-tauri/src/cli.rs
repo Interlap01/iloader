@@ -1093,13 +1093,9 @@ async fn sign_ipa(
                 .add_device(DeveloperDeviceType::Ios, &team, &format!("Device-{}", &uuid_trimmed[..8.min(uuid_trimmed.len())]), uuid_trimmed)
                 .await {
                 // 5405: the Apple ID has no room for another device, and
-                // removing one does not make room. Forget this login so the
-                // host asks for another Apple ID.
+                // removing one does not make room. The login is kept: the
+                // host shows when slots free up and offers another Apple ID.
                 if e.to_string().contains("5405") {
-                    let _ = delete_password(&used_email);
-                    if get_default_email().is_some_and(|d| d.eq_ignore_ascii_case(&used_email)) {
-                        let _ = delete_default_email();
-                    }
                     let msg = format!(
                         "Apple refused to register device {}: this Apple ID has reached its limit of registered devices (5405). Sign in with another Apple ID, or try again in a few days.",
                         uuid_trimmed
