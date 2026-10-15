@@ -211,24 +211,9 @@ const CLI_VERSION: &str = concat!(
 
 /// The anisette servers a host should try, best first. Printed by
 /// `iloader-cli anisette-servers` so a CLI release can change the list without
-/// a host release. ani.jkcoxson.com and ani2.stikstore.app emulate Windows,
-/// the identity Apple still accepts (2026-10-15); the others report macOS,
-/// which Apple refuses.
-const ANISETTE_SERVERS: &[&str] = &[
-    "ani.jkcoxson.com",
-    "ani2.stikstore.app",
-    "ani.sidestore.io",
-    "ani.sidestore.app",
-    "ani.sidestore.zip",
-    "ani.846969.xyz",
-    "ani.neoarz.com",
-    "ani.xu30.top",
-    "anisette.wedotstud.io",
-    "ani.npeg.us",
-    "ani.idevicehacked.com",
-    "anisette.crystall1ne.dev",
-    "ani3server.fly.dev",
-];
+/// a host release. Only servers that emulate Windows, the identity Apple still
+/// accepts (2026-10-15): the others report macOS, which Apple refuses.
+const ANISETTE_SERVERS: &[&str] = &["ani.jkcoxson.com", "ani2.stikstore.app"];
 
 #[derive(Parser)]
 #[command(name = "iloader-cli")]
