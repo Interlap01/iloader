@@ -303,6 +303,22 @@ enum Commands {
         anisette_server: String,
     },
 
+    /// List the iPhones registered to the Apple ID's team
+    #[command(hide = true)]
+    TeamDevices {
+        /// Apple ID email (uses cached if not provided)
+        #[arg(short, long)]
+        email: Option<String>,
+
+        /// Apple ID password (uses cached or prompts if not provided)
+        #[arg(short, long)]
+        password: Option<String>,
+
+        /// Anisette server URL (without https://)
+        #[arg(long, default_value = "ani.jkcoxson.com")]
+        anisette_server: String,
+    },
+
     /// Sign an IPA file (without installing)
     Sign {
         /// Path to the IPA file (omit when using --file)
@@ -402,6 +418,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             anisette_server,
         } => {
             revoke_certificate(email.as_deref(), password.as_deref(), &serial, &anisette_server).await?;
+        }
+        Commands::TeamDevices {
+            email,
+            password,
+            anisette_server,
+        } => {
+            team_devices(email.as_deref(), password.as_deref(), &anisette_server).await?;
         }
         Commands::Sign {
             ipa,
@@ -799,6 +822,70 @@ async fn list_certificates(
     Ok(())
 }
 
+/// Logs in and returns the developer session with its first team selected.
+async fn team_session(
+    email: Option<&str>,
+    password: Option<&str>,
+    anisette_server: &str,
+) -> Result<(DeveloperSession, isideload::developer_session::DeveloperTeam), Box<dyn std::error::Error>> {
+    let account = login_with_optional_creds(email, password, anisette_server).await?;
+    let mut dev_session = DeveloperSession::new(account);
+    let teams = dev_session.list_teams().await?;
+    if teams.is_empty() {
+        return Err("No developer teams found".into());
+    }
+    dev_session.set_team(teams[0].clone());
+    let team = dev_session.get_team().await?;
+    Ok((dev_session, team))
+}
+
+fn device_url(endpoint: &str) -> String {
+    format!(
+        "https://developerservices2.apple.com/services/QH65B2/ios/{}.action?clientId=XABBG36SBA",
+        endpoint
+    )
+}
+
+/// Prints the iPhones on the team as one JSON line:
+/// {"devices":[{"udid","name","model","expires"}]}. A free team's devices
+/// expire about a week after they were registered, freeing their slot.
+async fn team_devices(
+    email: Option<&str>,
+    password: Option<&str>,
+    anisette_server: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (dev_session, team) = team_session(email, password, anisette_server).await?;
+    let mut body = plist::Dictionary::new();
+    body.insert("teamId".into(), plist::Value::String(team.team_id.clone()));
+    let response = dev_session
+        .send_developer_request(&device_url("listDevices"), Some(body))
+        .await?;
+    let field = |d: &plist::Dictionary, key: &str| -> serde_json::Value {
+        match d.get(key) {
+            Some(plist::Value::String(s)) => s.clone().into(),
+            Some(plist::Value::Date(t)) => t.to_xml_format().into(),
+            _ => serde_json::Value::Null,
+        }
+    };
+    let devices: Vec<serde_json::Value> = response
+        .get("devices")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_dictionary())
+        .map(|d| {
+            serde_json::json!({
+                "udid": field(d, "deviceNumber"),
+                "name": field(d, "name"),
+                "model": field(d, "model"),
+                "expires": field(d, "expirationDate"),
+            })
+        })
+        .collect();
+    println!("{}", serde_json::json!({ "devices": devices }));
+    Ok(())
+}
+
 async fn revoke_certificate(
     email: Option<&str>,
     password: Option<&str>,
@@ -1005,6 +1092,21 @@ async fn sign_ipa(
             if let Err(e) = dev_session
                 .add_device(DeveloperDeviceType::Ios, &team, &format!("Device-{}", &uuid_trimmed[..8.min(uuid_trimmed.len())]), uuid_trimmed)
                 .await {
+                // 5405: the Apple ID has no room for another device, and
+                // removing one does not make room. Forget this login so the
+                // host asks for another Apple ID.
+                if e.to_string().contains("5405") {
+                    let _ = delete_password(&used_email);
+                    if get_default_email().is_some_and(|d| d.eq_ignore_ascii_case(&used_email)) {
+                        let _ = delete_default_email();
+                    }
+                    let msg = format!(
+                        "Apple refused to register device {}: this Apple ID has reached its limit of registered devices (5405). Sign in with another Apple ID, or try again in a few days.",
+                        uuid_trimmed
+                    );
+                    out.error(&msg);
+                    return Err(msg.into());
+                }
                 out.error(&format!("Failed to register device {}: {}", uuid_trimmed, e));
                 return Err(e.into());
             }
