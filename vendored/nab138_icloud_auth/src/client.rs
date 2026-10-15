@@ -627,7 +627,39 @@ impl AppleAccount {
             .send()
             .await;
 
-        let res = parse_response(res).await?;
+        let mut res = parse_response(res).await?;
+
+        // hsc 434: Apple wants the anisette machine resynced with the data it
+        // sent, then the init again (as upstream isideload does). A fresh
+        // anisette state gets this on its first login.
+        if let Some(sim) = Self::resync_sim(&res) {
+            let fresh = valid_anisette.resync(&sim).await?;
+            // Every later request (the proof, the 2FA calls) must carry the
+            // resynced data too: the cached data is what Apple just refused.
+            *self.anisette.lock().await = fresh.clone();
+            let packet = InitRequest {
+                header: header.clone(),
+                request: InitRequestBody {
+                    a_pub: plist::Value::Data(srp_client.compute_public_ephemeral(&a)),
+                    cpd: fresh.to_plist(true, false, false),
+                    operation: "init".to_string(),
+                    ps: vec![obf!("s2k").to_string(), obf!("s2k_fo").to_string()],
+                    username: username.to_string(),
+                },
+            };
+            let mut buffer = Vec::new();
+            plist::to_writer_xml(&mut buffer, &packet)?;
+            let buffer = String::from_utf8(buffer).unwrap();
+            let resent = self
+                .client
+                .post(obf!("https://gsa.apple.com/grandslam/GsService2"))
+                .headers(gsa_headers.clone())
+                .body(buffer)
+                .send()
+                .await;
+            res = parse_response(resent).await?;
+        }
+
         let err_check = Self::check_error(&res);
         if err_check.is_err() {
             return Err(err_check.err().unwrap());
@@ -716,8 +748,16 @@ impl AppleAccount {
             return match s.as_str() {
                 "trustedDeviceSecondaryAuth" => Ok(LoginState::NeedsDevice2FA),
                 "secondaryAuth" => Ok(LoginState::NeedsSMS2FA),
+                // No 2FA set up on the account (upstream isideload).
+                "repair" => Ok(LoginState::LoggedIn),
                 _unk => Ok(LoginState::NeedsExtraStep(_unk.to_string())),
             };
+        }
+
+        // hsc 409: Apple has already sent the 2FA code, and asking it to send
+        // one again is refused. Go straight to entering it (upstream isideload).
+        if status.get("hsc").and_then(plist::Value::as_signed_integer) == Some(409) {
+            return Ok(LoginState::Needs2FAVerification);
         }
 
         Ok(LoginState::LoggedIn)
@@ -754,7 +794,10 @@ impl AppleAccount {
             .await?;
 
         if !res.status().is_success() {
-            return Err(Error::AuthSrp);
+            return Err(Error::AuthSrpWithMessage(
+                res.status().as_u16() as i64,
+                format!("Apple refused to send the 2FA code to trusted devices (HTTP {})", res.status()),
+            ));
         }
 
         Ok(LoginState::Needs2FAVerification)
@@ -777,7 +820,25 @@ impl AppleAccount {
             .await?;
 
         if !res.status().is_success() {
-            return Err(Error::AuthSrp);
+            let status = res.status();
+            // Apple says why in the body or, when that is empty, in headers.
+            let headers: Vec<String> = res
+                .headers()
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "date" | "content-length" | "connection" | "server"))
+                .map(|(k, v)| format!("{}={}", k, v.to_str().unwrap_or("?")))
+                .collect();
+            let text = res.text().await.unwrap_or_default();
+            let text: String = text.chars().take(300).collect();
+            return Err(Error::AuthSrpWithMessage(
+                status.as_u16() as i64,
+                format!(
+                    "Apple refused to send the 2FA code by SMS (HTTP {}): body={:?} headers=[{}]",
+                    status,
+                    text,
+                    headers.join("; ")
+                ),
+            ));
         }
 
         Ok(LoginState::NeedsSMS2FAVerification(body))
@@ -856,6 +917,20 @@ impl AppleAccount {
         Ok(LoginState::NeedsLogin)
     }
 
+    /// The resync data (X-Apple-I-MD-DATA, base64) when Apple answers with
+    /// hsc 434; None for any other answer.
+    fn resync_sim(res: &plist::Dictionary) -> Option<String> {
+        let status = res.get("Status")?.as_dictionary()?;
+        if status.get("hsc").and_then(plist::Value::as_signed_integer) != Some(434) {
+            return None;
+        }
+        match status.get("X-Apple-I-MD-DATA")? {
+            plist::Value::Data(d) => Some(general_purpose::STANDARD.encode(d)),
+            plist::Value::String(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
     fn check_error(res: &plist::Dictionary) -> Result<(), Error> {
         let res = match res.get("Status") {
             Some(plist::Value::Dictionary(d)) => d,
@@ -863,9 +938,19 @@ impl AppleAccount {
         };
 
         if res.get(obf!("ec")).unwrap().as_signed_integer().unwrap() != 0 {
+            // hsc says what Apple wants next (434 = resync the anisette data,
+            // sent in X-Apple-I-MD-DATA); the message alone does not.
+            let mut message = res.get(obf!("em")).unwrap().as_string().unwrap().to_owned();
+            if let Some(hsc) = res.get("hsc").and_then(plist::Value::as_signed_integer) {
+                message.push_str(&format!(" [hsc {}", hsc));
+                if res.contains_key("X-Apple-I-MD-DATA") {
+                    message.push_str(", resync data sent");
+                }
+                message.push(']');
+            }
             return Err(Error::AuthSrpWithMessage(
                 res.get(obf!("ec")).unwrap().as_signed_integer().unwrap(),
-                res.get(obf!("em")).unwrap().as_string().unwrap().to_owned(),
+                message,
             ));
         }
 
@@ -898,8 +983,22 @@ impl AppleAccount {
                 HeaderValue::from_str("text/x-xml-plist").unwrap(),
             );
             headers.insert("Accept", HeaderValue::from_str("text/x-xml-plist").unwrap());
+        } else {
+            headers.insert("Content-Type", HeaderValue::from_str("application/json").unwrap());
+            headers.insert("Accept", HeaderValue::from_str("application/json").unwrap());
         }
-        headers.insert("User-Agent", HeaderValue::from_str(obf!("Xcode")).unwrap());
+        // The Xcode version upstream isideload sends. The password step keeps
+        // 11.2 (27.0 there got -22406 in September); the 2FA calls take 27.0.
+        headers.insert(
+            HeaderName::from_str(&obf!("X-Xcode-Version")).unwrap(),
+            HeaderValue::from_str(obf!("27.0 (27A5218g)")).unwrap(),
+        );
+        // The same agent as the login (the anisette server's), as upstream
+        // isideload sends: "Xcode" no longer matches the Windows identity.
+        headers.insert(
+            "User-Agent",
+            HeaderValue::from_str(obf!("akd/1.0 CFNetwork/808.1.4")).unwrap(),
+        );
         headers.insert("Accept-Language", HeaderValue::from_str("en-us").unwrap());
         headers.append(
             HeaderName::from_str(&obf!("X-Apple-Identity-Token")).unwrap(),

@@ -54,7 +54,7 @@ impl From<tokio_tungstenite::tungstenite::error::Error> for AnisetteError {
 
 pub const DEFAULT_ANISETTE_URL: &str = "https://ani.f1sh.me/";
 
-pub const DEFAULT_ANISETTE_URL_V3: &str = "https://ani.sidestore.io";
+pub const DEFAULT_ANISETTE_URL_V3: &str = "https://ani.jkcoxson.com";
 
 #[derive(Clone, Debug)]
 pub struct AnisetteConfiguration {

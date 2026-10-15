@@ -209,6 +209,25 @@ const CLI_VERSION: &str = concat!(
     ")"
 );
 
+/// The anisette servers a host should try, best first. Printed by
+/// `iloader-cli anisette-servers` so a CLI release can change the list without
+/// a host release. ani.jkcoxson.com emulates Windows, the identity Apple still
+/// accepts (2026-10-14); the others report macOS, which Apple refuses.
+const ANISETTE_SERVERS: &[&str] = &[
+    "ani.jkcoxson.com",
+    "ani.sidestore.io",
+    "ani.sidestore.app",
+    "ani.sidestore.zip",
+    "ani.846969.xyz",
+    "ani.neoarz.com",
+    "ani.xu30.top",
+    "anisette.wedotstud.io",
+    "ani.npeg.us",
+    "ani.idevicehacked.com",
+    "anisette.crystall1ne.dev",
+    "ani3server.fly.dev",
+];
+
 #[derive(Parser)]
 #[command(name = "iloader-cli")]
 #[command(about = "Sideload iOS apps with your Apple ID", long_about = None)]
@@ -223,6 +242,9 @@ enum Commands {
     /// List connected iOS devices
     Devices,
 
+    /// Print the anisette servers to try, best first, as JSON
+    AnisetteServers,
+
     /// Login to Apple ID and save credentials
     Login {
         /// Apple ID email
@@ -230,7 +252,7 @@ enum Commands {
         email: String,
 
         /// Anisette server URL (without https://)
-        #[arg(long, default_value = "ani.sidestore.io")]
+        #[arg(long, default_value = "ani.jkcoxson.com")]
         anisette_server: String,
     },
 
@@ -256,7 +278,7 @@ enum Commands {
         device: String,
 
         /// Anisette server URL (without https://)
-        #[arg(long, default_value = "ani.sidestore.io")]
+        #[arg(long, default_value = "ani.jkcoxson.com")]
         anisette_server: String,
     },
 
@@ -271,7 +293,7 @@ enum Commands {
         password: Option<String>,
 
         /// Anisette server URL (without https://)
-        #[arg(long, default_value = "ani.sidestore.io")]
+        #[arg(long, default_value = "ani.jkcoxson.com")]
         anisette_server: String,
     },
 
@@ -290,7 +312,7 @@ enum Commands {
         serial: String,
 
         /// Anisette server URL (without https://)
-        #[arg(long, default_value = "ani.sidestore.io")]
+        #[arg(long, default_value = "ani.jkcoxson.com")]
         anisette_server: String,
     },
 
@@ -336,7 +358,7 @@ enum Commands {
         key: Option<PathBuf>,
 
         /// Anisette server URL (without https://)
-        #[arg(long, default_value = "ani.sidestore.io")]
+        #[arg(long, default_value = "ani.jkcoxson.com")]
         anisette_server: String,
 
         /// Output JSON instead of text (for integration with other tools)
@@ -352,6 +374,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Devices => {
             list_devices().await?;
+        }
+        Commands::AnisetteServers => {
+            println!("{}", serde_json::json!({ "servers": ANISETTE_SERVERS }));
         }
         Commands::Login {
             email,

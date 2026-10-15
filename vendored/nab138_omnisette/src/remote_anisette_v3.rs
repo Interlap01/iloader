@@ -192,17 +192,31 @@ fn make_reqwest() -> Result<Client, AnisetteError> {
 
 impl AnisetteClient {
     pub async fn new(url: String) -> Result<AnisetteClient, AnisetteError> {
-        // Since 2026-10-12 Apple refuses the login (-80045) for the macOS
-        // client info the anisette servers report. Present as Android, as
-        // upstream isideload 0.4.5 does, instead of asking the server.
-        let client_info = AnisetteClientInfo {
-            client_info: obf!(
-                "<Pixel 7> <Android;14;UQ1A.240205.002> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
-            )
-            .to_string(),
-            user_agent: obf!("akd/1.0 CFNetwork/808.1.4").to_string(),
-        };
+        // Apple keeps blocking identities (macOS with -80045 on 2026-10-12,
+        // the hard-coded Android one with an HTTP 503 on 2026-10-14), so take
+        // the one the anisette server emulates, as upstream isideload 0.4.6
+        // does. The anisette data must match it anyway.
+        let client_info = make_reqwest()?
+            .get(format!("{}/v3/client_info", url))
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<AnisetteClientInfo>()
+            .await?;
         Ok(AnisetteClient { client_info, url })
+    }
+
+    /// The anisette state file for this identity's platform: a state
+    /// provisioned under one identity is not valid under another.
+    fn state_file(&self) -> &'static str {
+        let info = self.client_info.client_info.as_str();
+        if info.contains("<Windows;") {
+            "windows_state.plist"
+        } else if info.contains("<Android;") {
+            "android_state.plist"
+        } else {
+            "macos_state.plist"
+        }
     }
 
     fn build_apple_request(
@@ -223,7 +237,13 @@ impl AnisetteClient {
             .header(obf!("X-Apple-Locale"), "en_US")
     }
 
-    pub async fn get_headers(&self, state: &AnisetteState) -> Result<AnisetteData, AnisetteError> {
+    /// Fetches anisette headers. With `sim` (the X-Apple-I-MD-DATA Apple sent
+    /// with hsc 434), the server resyncs the machine first.
+    pub async fn get_headers(
+        &self,
+        state: &AnisetteState,
+        sim: Option<&str>,
+    ) -> Result<AnisetteData, AnisetteError> {
         let path = format!("{}/v3/get_headers", self.url);
         let http_client = make_reqwest()?;
 
@@ -231,6 +251,12 @@ impl AnisetteClient {
         struct GetHeadersBody {
             identifier: String,
             adi_pb: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            sim: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            device_id: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            md_lu: Option<String>,
         }
         let body = GetHeadersBody {
             identifier: base64_encode(&state.keychain_identifier),
@@ -240,6 +266,9 @@ impl AnisetteClient {
                     .as_ref()
                     .ok_or(AnisetteError::AnisetteNotProvisioned)?,
             ),
+            sim: sim.map(str::to_string),
+            device_id: sim.map(|_| state.device_id()),
+            md_lu: sim.map(|_| encode_hex(&state.md_lu())),
         };
 
         #[derive(Deserialize)]
@@ -493,7 +522,7 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
 
         fs::create_dir_all(&self.configuration_path)?;
 
-        let config_path = self.configuration_path.join("state.plist");
+        let config_path = self.configuration_path.join(client.state_file());
         if self.state.is_none() {
             self.state = Some(if let Ok(text) = plist::from_file(&config_path) {
                 text
@@ -507,20 +536,35 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
             client.provision(state).await?;
             plist::to_file_xml(&config_path, state)?;
         }
-        let data = match client.get_headers(state).await {
+        let data = match client.get_headers(state, None).await {
             Ok(data) => data,
             Err(err) => {
                 if matches!(err, AnisetteError::AnisetteNotProvisioned) {
                     state.adi_pb = None;
                     client.provision(state).await?;
                     plist::to_file_xml(config_path, state)?;
-                    client.get_headers(state).await?
+                    client.get_headers(state, None).await?
                 } else {
                     panic!()
                 }
             }
         };
         Ok(data.get_headers(self.serial.clone()))
+    }
+
+    async fn resync_authentication_headers(
+        &mut self,
+        sim: &str,
+    ) -> Result<HashMap<String, String>, AnisetteError> {
+        if self.client.is_none() || self.state.is_none() {
+            // Loads (and if needed provisions) the state the resync is for.
+            self.get_anisette_headers(false).await?;
+        }
+        let client = self.client.as_ref().unwrap();
+        let state = self.state.as_ref().unwrap();
+        let data = client.get_headers(state, Some(sim)).await?;
+        let headers = data.get_headers(self.serial.clone());
+        Ok(self.normalize_headers(headers))
     }
 }
 

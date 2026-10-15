@@ -22,6 +22,19 @@ impl AnisetteData {
         })
     }
 
+    /// Fresh data after the anisette server resyncs the machine with `sim`,
+    /// the X-Apple-I-MD-DATA Apple sends with hsc 434.
+    pub async fn resync(&self, sim: &str) -> Result<Self, crate::Error> {
+        let mut b = AnisetteHeaders::get_anisette_headers_provider(self.config.clone())?;
+        let base_headers = b.provider.resync_authentication_headers(sim).await?;
+
+        Ok(AnisetteData {
+            base_headers,
+            generated_at: SystemTime::now(),
+            config: self.config.clone(),
+        })
+    }
+
     pub fn needs_refresh(&self) -> bool {
         let elapsed = self.generated_at.elapsed().unwrap();
         elapsed.as_secs() > 60
@@ -49,17 +62,19 @@ impl AnisetteData {
         let old_client_info = headers.remove("X-Mme-Client-Info");
         if client_info {
             let client_info = match old_client_info {
-                Some(v) => {
+                // Apple's GSA edge returns HTTP 503 for any client info
+                // containing com.apple.dt.Xcode (since September 2026), so
+                // that one is reported as akd, the daemon that really sends
+                // this request. Any other identity goes out as the anisette
+                // server reported it.
+                Some(v) if v.contains("com.apple.dt.Xcode") => {
                     let temp = v.as_str();
-
-                    // Apple's GSA edge returns HTTP 503 for any client info
-                    // containing com.apple.dt.Xcode (since September 2026).
-                    // Report as akd, the daemon that really sends this request.
                     temp.replace(
                         temp.split('<').nth(3).unwrap().split('>').nth(0).unwrap(),
                         obf!("com.apple.AuthKit/1 (com.apple.akd/1.0)"),
                     )
                 }
+                Some(v) => v,
                 None => {
                     return headers;
                 }

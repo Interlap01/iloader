@@ -16,6 +16,15 @@ pub trait AnisetteHeadersProvider: Send + Sync {
         Ok(self.normalize_headers(headers))
     }
 
+    /// Headers after a resync with `sim`, the X-Apple-I-MD-DATA Apple sends
+    /// with hsc 434. A provider without resync support returns fresh headers.
+    async fn resync_authentication_headers(
+        &mut self,
+        _sim: &str,
+    ) -> Result<HashMap<String, String>, AnisetteError> {
+        self.get_authentication_headers().await
+    }
+
     /// Normalizes headers to ensure that all the required headers are given.
     fn normalize_headers(
         &mut self,
