@@ -7,7 +7,7 @@ use base64::engine::general_purpose;
 use base64::Engine;
 use chrono::{DateTime, SubsecRound, Utc};
 use futures_util::{stream::StreamExt, SinkExt};
-use log::debug;
+use log::{debug, warn};
 use plist::{Data, Dictionary};
 use rand::Rng;
 use reqwest::{Client, ClientBuilder, RequestBuilder};
@@ -296,10 +296,11 @@ impl AnisetteClient {
             .await?;
         match headers {
             AnisetteHeaders::GetHeadersError { message } => {
+                // -45061: the server no longer knows this machine.
                 if message.contains("-45061") {
                     Err(AnisetteError::AnisetteNotProvisioned)
                 } else {
-                    panic!("Unknown error {}", message)
+                    Err(anyhow::anyhow!("anisette server: {message}").into())
                 }
             }
             AnisetteHeaders::Headers {
@@ -538,16 +539,10 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
         }
         let data = match client.get_headers(state, None).await {
             Ok(data) => data,
-            Err(err) => {
-                if matches!(err, AnisetteError::AnisetteNotProvisioned) {
-                    state.adi_pb = None;
-                    client.provision(state).await?;
-                    plist::to_file_xml(config_path, state)?;
-                    client.get_headers(state, None).await?
-                } else {
-                    panic!()
-                }
+            Err(AnisetteError::AnisetteNotProvisioned) => {
+                Self::reprovision(client, state, &config_path).await?
             }
+            Err(err) => return Err(err),
         };
         Ok(data.get_headers(self.serial.clone()))
     }
@@ -561,10 +556,35 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
             self.get_anisette_headers(false).await?;
         }
         let client = self.client.as_ref().unwrap();
-        let state = self.state.as_ref().unwrap();
-        let data = client.get_headers(state, Some(sim)).await?;
+        let config_path = self.configuration_path.join(client.state_file());
+        let state = self.state.as_mut().unwrap();
+        let data = match client.get_headers(state, Some(sim)).await {
+            Ok(data) => data,
+            // The sim was for the machine the server lost; a new machine's
+            // headers are the best answer left.
+            Err(AnisetteError::AnisetteNotProvisioned) => {
+                Self::reprovision(client, state, &config_path).await?
+            }
+            Err(err) => return Err(err),
+        };
         let headers = data.get_headers(self.serial.clone());
         Ok(self.normalize_headers(headers))
+    }
+}
+
+impl RemoteAnisetteProviderV3 {
+    /// Replaces a machine the server answers -45061 for with a new one, as
+    /// isideload does: re-provisioning under the old identifier keeps failing.
+    async fn reprovision(
+        client: &AnisetteClient,
+        state: &mut AnisetteState,
+        config_path: &std::path::Path,
+    ) -> Result<AnisetteData, AnisetteError> {
+        warn!("anisette server lost this machine (-45061); provisioning a new one");
+        *state = AnisetteState::new();
+        client.provision(state).await?;
+        plist::to_file_xml(config_path, state)?;
+        client.get_headers(state, None).await
     }
 }
 

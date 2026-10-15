@@ -218,8 +218,18 @@ pub struct AuthenticationExtras {
 async fn parse_response(
     res: Result<Response, reqwest::Error>,
 ) -> Result<plist::Dictionary, crate::Error> {
-    let res = res?.text().await?;
-    let res: plist::Dictionary = plist::from_bytes(res.as_bytes())?;
+    let res = res?;
+    let status = res.status();
+    let url = res.url().path().to_string();
+    let text = res.text().await?;
+    let res: plist::Dictionary = plist::from_bytes(text.as_bytes()).map_err(|_| {
+        // Apple answered with something other than a plist (an HTML page).
+        let body: String = text.chars().take(600).collect();
+        crate::Error::AuthSrpWithMessage(
+            status.as_u16() as i64,
+            format!("Apple sent no plist for {} (HTTP {}): body={:?}", url, status, body),
+        )
+    })?;
     let res: plist::Value = res.get(obf!("Response")).unwrap().to_owned();
     match res {
         plist::Value::Dictionary(dict) => Ok(dict),
@@ -246,6 +256,10 @@ impl AppleAccount {
             // .danger_accept_invalid_certs(true)
             .http1_title_case_headers()
             .connection_verbose(true)
+            // A new connection per request, as upstream's Connection: close:
+            // once 2FA passes, Apple answers 503 to every later request on a
+            // reused connection, while a new one logs in.
+            .pool_max_idle_per_host(0)
             .build()?;
 
         Ok(AppleAccount {
@@ -884,7 +898,27 @@ impl AppleAccount {
             .send()
             .await?;
 
-        let res: plist::Dictionary = plist::from_bytes(res.text().await?.as_bytes())?;
+        let status = res.status();
+        // Apple says why in the body or, when that is empty, in headers.
+        let resp_headers: Vec<String> = res
+            .headers()
+            .iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "date" | "content-length" | "connection" | "server"))
+            .map(|(k, v)| format!("{}={}", k, v.to_str().unwrap_or("?")))
+            .collect();
+        let text = res.text().await?;
+        let res: plist::Dictionary = plist::from_bytes(text.as_bytes()).map_err(|_| {
+            let body: String = text.chars().take(600).collect();
+            Error::AuthSrpWithMessage(
+                status.as_u16() as i64,
+                format!(
+                    "Apple did not accept the 2FA code (HTTP {}): body={:?} headers=[{}]",
+                    status,
+                    body,
+                    resp_headers.join("; ")
+                ),
+            )
+        })?;
 
         Self::check_error(&res)?;
 
