@@ -211,9 +211,11 @@ const CLI_VERSION: &str = concat!(
 
 /// The anisette servers a host should try, best first. Printed by
 /// `iloader-cli anisette-servers` so a CLI release can change the list without
-/// a host release. Only servers that emulate Windows, the identity Apple still
-/// accepts (2026-10-15): the others report macOS, which Apple refuses.
-const ANISETTE_SERVERS: &[&str] = &["ani.jkcoxson.com", "ani2.stikstore.app"];
+/// a host release. Only identities Apple still accepts: ani3.stikstore.app
+/// reports an old Mac (macOS 10.12.6), verified with login, 2FA and a
+/// developer call (2026-10-17); the other two emulate Windows. Servers that
+/// report macOS 13.1 are refused with -80045.
+const ANISETTE_SERVERS: &[&str] = &["ani3.stikstore.app", "ani.jkcoxson.com", "ani2.stikstore.app"];
 
 #[derive(Parser)]
 #[command(name = "iloader-cli")]
