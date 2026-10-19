@@ -211,16 +211,19 @@ const CLI_VERSION: &str = concat!(
 
 /// The anisette servers a host should try, best first. Printed by
 /// `iloader-cli anisette-servers` so a CLI release can change the list without
-/// a host release. Only identities Apple still accepts: ani3.stikstore.app
-/// reports an old Mac (macOS 10.12.6), verified with login, 2FA and a
-/// developer call (2026-10-17); mac-ani.jkcoxson.com is upstream's default Mac
-/// server (2026-10-16); the other two emulate Windows. Servers that report
-/// macOS 13.1 are refused with -80045.
+/// a host release. Upstream's order (2026-10-18), except new.ani.sidestore.io:
+/// upstream's default, it reports the same old Mac but answered 502 to 11 of
+/// 12 requests (2026-10-19), so it is tried last. ani3.stikstore.app reports
+/// an old Mac (macOS 10.12.6), verified with login, 2FA and a developer call
+/// (2026-10-17); the two Windows servers follow, and ani.jkcoxson.com fails
+/// about half the time and with SMS 2FA. Servers that report macOS 13.1 are
+/// refused with -80045.
 const ANISETTE_SERVERS: &[&str] = &[
-    "ani3.stikstore.app",
     "mac-ani.jkcoxson.com",
+    "ani3.stikstore.app",
     "ani.jkcoxson.com",
     "ani2.stikstore.app",
+    "new.ani.sidestore.io",
 ];
 
 #[derive(Parser)]
