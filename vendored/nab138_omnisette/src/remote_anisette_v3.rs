@@ -203,6 +203,22 @@ impl AnisetteClient {
             .error_for_status()?
             .json::<AnisetteClientInfo>()
             .await?;
+        // The Mac servers all report macOS 10.12.6, which Apple refuses for
+        // some accounts with -23782 "A Mac with macOS version 10.13 or later
+        // is required" (since 2026-10-24). Report a current Mac instead, as
+        // upstream iloader 2.4.1 does until the servers catch up. Windows
+        // and Android identities go out as reported.
+        let client_info = if client_info.client_info.contains("<Mac OS X;") {
+            AnisetteClientInfo {
+                client_info: obf!(
+                    "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+                )
+                .to_string(),
+                user_agent: obf!("akd/1.0 CFNetwork/811.5.4").to_string(),
+            }
+        } else {
+            client_info
+        };
         Ok(AnisetteClient { client_info, url })
     }
 

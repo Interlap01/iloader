@@ -217,9 +217,11 @@ const CLI_VERSION: &str = concat!(
 /// an old Mac (macOS 10.12.6), verified with login, 2FA and a developer call
 /// (2026-10-17); the two Windows servers follow, and ani.jkcoxson.com fails
 /// about half the time and with SMS 2FA. Servers that report macOS 13.1 are
-/// refused with -80045.
+/// refused with -80045. ani.iloader.app is second, as upstream has it
+/// (2026-10-28).
 const ANISETTE_SERVERS: &[&str] = &[
     "mac-ani.jkcoxson.com",
+    "ani.iloader.app",
     "ani3.stikstore.app",
     "ani.jkcoxson.com",
     "ani2.stikstore.app",
