@@ -263,6 +263,13 @@ enum Commands {
         email: Option<String>,
     },
 
+    /// Print the Apple ID signing uses when no email is given, if its login is saved
+    Account {
+        /// Output JSON ({"email": "..." or null}) instead of text
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Sideload an IPA to a device
     Sideload {
         /// Path to the IPA file
@@ -408,6 +415,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Logout { email } => {
             logout(email.as_deref())?;
+        }
+        Commands::Account { json } => {
+            // The saved email counts only while its password is saved too:
+            // signing without an email needs both.
+            let email = get_default_email().filter(|e| get_cached_password(e).is_some());
+            if json {
+                println!("{}", serde_json::json!({ "email": email }));
+            } else {
+                match email {
+                    Some(e) => println!("Signed in as {}", e),
+                    None => println!("Not signed in"),
+                }
+            }
         }
         Commands::Sideload {
             ipa,
