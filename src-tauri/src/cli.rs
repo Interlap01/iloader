@@ -380,6 +380,21 @@ enum Commands {
         #[arg(long)]
         key: Option<PathBuf>,
 
+        /// Offline mode: entitlements (.plist) to sign the app with instead of
+        /// the profile's; they must be ones the profile grants.
+        #[arg(long)]
+        entitlements: Option<PathBuf>,
+
+        /// Offline mode: an app extension's own profile, as BUNDLE_ID=PATH
+        /// (repeatable). Without one an extension is signed with the app's.
+        #[arg(long = "extension-profile", value_name = "BUNDLE_ID=PATH")]
+        extension_profiles: Vec<String>,
+
+        /// Offline mode: an app extension's entitlements, as BUNDLE_ID=PATH
+        /// (repeatable); without them it gets its profile's.
+        #[arg(long = "extension-entitlements", value_name = "BUNDLE_ID=PATH")]
+        extension_entitlements: Vec<String>,
+
         /// Anisette server URL (without https://)
         #[arg(long, default_value = "ani.jkcoxson.com")]
         anisette_server: String,
@@ -469,12 +484,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             profile,
             cert,
             key,
+            entitlements,
+            extension_profiles,
+            extension_entitlements,
             anisette_server,
             json,
         } => {
             if let Some(file) = file {
                 sign_file(&file, cert.as_ref(), key.as_ref(), profile.as_ref(), output.as_ref(), json)?;
             } else if let Some(ipa) = ipa {
+                let parsed = parse_bundle_paths(&extension_profiles, "--extension-profile")
+                    .and_then(|p| Ok((p, parse_bundle_paths(&extension_entitlements, "--extension-entitlements")?)));
+                let (extension_profiles, extension_entitlements) = match parsed {
+                    Ok(p) => p,
+                    Err(e) => {
+                        Output::new(json).error(&e.to_string());
+                        return Err(e);
+                    }
+                };
+                let extras = OfflineExtras { entitlements, extension_profiles, extension_entitlements };
                 sign_ipa(
                     &ipa,
                     email.as_deref(),
@@ -486,6 +514,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     profile.as_ref(),
                     cert.as_ref(),
                     key.as_ref(),
+                    &extras,
                 )
                 .await?;
             } else {
@@ -1051,6 +1080,7 @@ async fn sign_ipa(
     reuse_profile: Option<&PathBuf>,
     reuse_cert: Option<&PathBuf>,
     reuse_key: Option<&PathBuf>,
+    extras: &OfflineExtras,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use isideload::certificate::CertificateIdentity;
     use std::fs::File;
@@ -1064,7 +1094,11 @@ async fn sign_ipa(
     // re-sign locally with zsign and skip every Apple round-trip. The caller is
     // responsible for having checked the profile is still valid for the device.
     if let (Some(profile), Some(cert), Some(key)) = (reuse_profile, reuse_cert, reuse_key) {
-        return sign_ipa_offline(ipa_path, output_path, profile, cert, key, &out);
+        return sign_ipa_offline(ipa_path, output_path, profile, cert, key, extras, &out);
+    }
+    if extras.entitlements.is_some() || !extras.extension_profiles.is_empty() || !extras.extension_entitlements.is_empty() {
+        out.error("--entitlements, --extension-profile and --extension-entitlements need --profile, --cert and --key");
+        return Err("--entitlements, --extension-profile and --extension-entitlements need --profile, --cert and --key".into());
     }
 
     if device_uuids.is_empty() {
@@ -1460,6 +1494,27 @@ fn identity_from_profile(profile: &plist::Value) -> (Option<String>, String) {
     (new_bundle_id, team_id)
 }
 
+/// What offline signing takes beyond the profile, certificate and key, all
+/// optional: the app's entitlements, and each app extension's own profile and
+/// entitlements. Empty signs exactly as before they existed.
+#[derive(Default)]
+struct OfflineExtras {
+    entitlements: Option<PathBuf>,
+    extension_profiles: Vec<(String, PathBuf)>,
+    extension_entitlements: Vec<(String, PathBuf)>,
+}
+
+/// parse_bundle_paths reads repeated BUNDLE_ID=PATH flags.
+fn parse_bundle_paths(values: &[String], flag: &str) -> Result<Vec<(String, PathBuf)>, Box<dyn std::error::Error>> {
+    values
+        .iter()
+        .map(|v| match v.split_once('=') {
+            Some((id, path)) if !id.trim().is_empty() && !path.trim().is_empty() => Ok((id.trim().to_string(), PathBuf::from(path.trim()))),
+            _ => Err(format!("{} takes BUNDLE_ID=PATH, not {:?}", flag, v).into()),
+        })
+        .collect()
+}
+
 /// Re-signs an IPA locally with a previously issued provisioning profile + cert +
 /// key, skipping every Apple round-trip. The caller must have already verified
 /// the profile is still valid for the target device.
@@ -1469,12 +1524,27 @@ fn sign_ipa_offline(
     profile: &PathBuf,
     cert: &PathBuf,
     key: &PathBuf,
+    extras: &OfflineExtras,
     out: &Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs::File;
     use zip::ZipArchive;
 
-    for (label, p) in [("profile", profile), ("certificate", cert), ("private key", key)] {
+    let mut inputs: Vec<(&str, &PathBuf)> = vec![("profile", profile), ("certificate", cert), ("private key", key)];
+    if let Some(e) = &extras.entitlements {
+        inputs.push(("entitlements", e));
+    }
+    for (_, p) in &extras.extension_profiles {
+        inputs.push(("extension profile", p));
+    }
+    for (id, p) in &extras.extension_entitlements {
+        if !extras.extension_profiles.iter().any(|(pid, _)| pid == id) {
+            out.error(&format!("--extension-entitlements {} has no --extension-profile", id));
+            return Err(format!("--extension-entitlements {} has no --extension-profile", id).into());
+        }
+        inputs.push(("extension entitlements", p));
+    }
+    for (label, p) in inputs {
         if !p.exists() {
             out.error(&format!("{} not found: {}", label, p.display()));
             return Err(format!("{} not found: {}", label, p.display()).into());
@@ -1544,14 +1614,25 @@ fn sign_ipa_offline(
     plist::to_file_xml(&info_plist_path, &plist::Value::Dictionary(info_dict))?;
 
     out.progress(3, 3, "Signing app");
-    if let Err(e) = ZSignOptions::new(app_dir.to_str().unwrap())
+    let mut options = ZSignOptions::new(app_dir.to_str().unwrap())
         .with_cert_file(cert.to_str().unwrap())
         .with_pkey_file(key.to_str().unwrap())
         .with_prov_file(profile.to_str().unwrap())
         .with_force()
         .with_disable_cache()
-        .with_quiet()
-        .sign()
+        .with_quiet();
+    if let Some(e) = &extras.entitlements {
+        options = options.with_entitlements_file(e.to_str().unwrap());
+    }
+    for (id, prov) in &extras.extension_profiles {
+        let ents = extras
+            .extension_entitlements
+            .iter()
+            .find(|(eid, _)| eid == id)
+            .map(|(_, p)| p.to_str().unwrap().to_string());
+        options = options.with_bundle(id.clone(), prov.to_str().unwrap().to_string(), ents);
+    }
+    if let Err(e) = options.sign()
     {
         std::fs::remove_dir_all(&temp_dir)?;
         out.error(&format!("Offline signing failed: {}", e));

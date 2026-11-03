@@ -1,0 +1,274 @@
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use super::env;
+
+pub fn get_openssl(target: &str) -> (Vec<PathBuf>, PathBuf) {
+    // First, try pkg-config/vcpkg. Do not exit the build script.
+    if let Some((lib_dirs, include_dir)) = try_pkg_config_paths() {
+        return (lib_dirs, include_dir);
+    }
+    if let Some((lib_dirs, include_dir)) = try_vcpkg_paths() {
+        return (lib_dirs, include_dir);
+    }
+
+    let lib_dir = env("OPENSSL_LIB_DIR").map(PathBuf::from);
+    let include_dir = env("OPENSSL_INCLUDE_DIR").map(PathBuf::from);
+
+    match (lib_dir, include_dir) {
+        (Some(lib_dir), Some(include_dir)) => (vec![lib_dir], include_dir),
+        (lib_dir, include_dir) => {
+            let openssl_dir = env("OPENSSL_DIR").unwrap_or_else(|| find_openssl_dir(target));
+            let openssl_dir = Path::new(&openssl_dir);
+            let lib_dir = lib_dir.map(|d| vec![d]).unwrap_or_else(|| {
+                let mut lib_dirs = vec![];
+                if openssl_dir.join("lib64").exists() {
+                    lib_dirs.push(openssl_dir.join("lib64"));
+                }
+                if openssl_dir.join("lib").exists() {
+                    lib_dirs.push(openssl_dir.join("lib"));
+                }
+                lib_dirs
+            });
+            let include_dir = include_dir.unwrap_or_else(|| openssl_dir.join("include"));
+            (lib_dir, include_dir)
+        }
+    }
+}
+
+fn resolve_with_wellknown_homebrew_location(dir: &str) -> Option<PathBuf> {
+    let versions = ["openssl@3", "openssl@3.0", "openssl@1.1"];
+
+    // Check up default aarch 64 Homebrew installation location first
+    // for quick resolution if possible.
+    //  `pkg-config` on brew doesn't necessarily contain settings for openssl apparently.
+    for version in &versions {
+        let homebrew = Path::new(dir).join(format!("opt/{}", version));
+        if homebrew.exists() {
+            return Some(homebrew);
+        }
+    }
+
+    for version in &versions {
+        // Calling `brew --prefix <package>` command usually slow and
+        // takes seconds, and will be used only as a last resort.
+        let output = execute_command_and_get_output("brew", &["--prefix", version]);
+        if let Some(ref output) = output {
+            let homebrew = Path::new(&output);
+            if homebrew.exists() {
+                return Some(homebrew.to_path_buf());
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_with_wellknown_location(dir: &str) -> Option<PathBuf> {
+    let root_dir = Path::new(dir);
+    let include_openssl = root_dir.join("include/openssl");
+    if include_openssl.exists() {
+        Some(root_dir.to_path_buf())
+    } else {
+        None
+    }
+}
+
+fn find_openssl_dir(target: &str) -> OsString {
+    let host = env::var("HOST").unwrap();
+
+    if host == target && target.ends_with("-apple-darwin") {
+        let homebrew_dir = match target {
+            "aarch64-apple-darwin" => "/opt/homebrew",
+            _ => "/usr/local",
+        };
+
+        if let Some(dir) = resolve_with_wellknown_homebrew_location(homebrew_dir) {
+            return dir.into();
+        } else if let Some(dir) = resolve_with_wellknown_location("/opt/pkg") {
+            return dir.into();
+        } else if let Some(dir) = resolve_with_wellknown_location("/opt/local") {
+            return dir.into();
+        }
+    }
+
+    // FreeBSD, OpenBSD, and AIX ship with Libre|OpenSSL
+    // TODO: see of this is still needed for OpenBSD
+    if host == target
+        && (target.contains("freebsd") || target.contains("openbsd") || target.contains("aix"))
+    {
+        return OsString::from("/usr");
+    }
+
+    // DragonFly has libressl (or openssl) in ports, but this doesn't include a pkg-config file
+    if host == target && target.contains("dragonfly") {
+        return OsString::from("/usr/local");
+    }
+
+    let msg_header =
+        "Could not find directory of OpenSSL installation, and this `-sys` crate cannot
+proceed without this knowledge. If OpenSSL is installed and this crate had
+trouble finding it,  you can set the `OPENSSL_DIR` environment variable for the
+compilation process.";
+
+    println!(
+        "cargo:warning={} See stderr section below for further information.",
+        msg_header.replace('\n', " ")
+    );
+
+    let mut msg = format!(
+        "
+
+{}
+
+Make sure you also have the development packages of openssl installed.
+For example, `libssl-dev` on Ubuntu or `openssl-devel` on Fedora.
+
+If you're in a situation where you think the directory *should* be found
+automatically, please open a bug at https://github.com/sfackler/rust-openssl
+and include information about your system as well as this message.
+
+$HOST = {}
+$TARGET = {}
+openssl-sys = {}
+
+",
+        msg_header,
+        host,
+        target,
+        env!("CARGO_PKG_VERSION")
+    );
+
+    if host.contains("apple-darwin") && target.contains("apple-darwin") {
+        let system = Path::new("/usr/lib/libssl.0.9.8.dylib");
+        if system.exists() {
+            msg.push_str(
+                "
+
+openssl-sys crate build failed: no supported version of OpenSSL found.
+
+Ways to fix it:
+- Use the `vendored` feature of openssl-sys crate to build OpenSSL from source.
+- Use Homebrew to install the `openssl` package.
+
+",
+            );
+        }
+    }
+
+    if host.contains("unknown-linux")
+        && target.contains("unknown-linux-gnu")
+        && Command::new("pkg-config").output().is_err()
+    {
+        msg.push_str(
+            "
+It looks like you're compiling on Linux and also targeting Linux. Currently this
+requires the `pkg-config` utility to find OpenSSL but unfortunately `pkg-config`
+could not be found. If you have OpenSSL installed you can likely fix this by
+installing `pkg-config`.
+
+",
+        );
+    }
+
+    if host.contains("windows") && target.contains("windows-gnu") {
+        msg.push_str(
+            "
+It looks like you're compiling for MinGW but you may not have either OpenSSL or
+pkg-config installed. You can install these two dependencies with:
+
+pacman -S openssl-devel pkgconf
+
+and try building this crate again.
+
+",
+        );
+    }
+
+    if host.contains("windows") && target.contains("windows-msvc") {
+        msg.push_str(
+            "
+It looks like you're compiling for MSVC but we couldn't detect an OpenSSL
+installation. If there isn't one installed then you can try the rust-openssl
+README for more information about how to download precompiled binaries of
+OpenSSL:
+
+https://github.com/sfackler/rust-openssl#windows
+
+",
+        );
+    }
+
+    eprintln!("{}", msg);
+    std::process::exit(101); // same as panic previously
+}
+
+fn try_pkg_config_paths() -> Option<(Vec<PathBuf>, PathBuf)> {
+    let target = env::var("TARGET").ok()?;
+    let host = env::var("HOST").ok()?;
+
+    if target.contains("windows-gnu") && host.contains("windows") {
+        unsafe {
+            env::set_var("PKG_CONFIG_ALLOW_CROSS", "1");
+        }
+    } else if target.contains("windows-msvc") {
+        return None; // MSVC uses vcpkg instead.
+    }
+
+    let lib = pkg_config::Config::new()
+        .print_system_libs(false)
+        .probe("openssl")
+        .ok()?;
+
+    // Emit link directives discovered by pkg-config.
+    for libname in lib.libs.iter() {
+        println!("cargo:rustc-link-lib={}", libname);
+    }
+    for path in lib.link_paths.iter() {
+        println!("cargo:rustc-link-search=native={}", path.display());
+    }
+
+    // Prefer the first include path.
+    let include_dir = lib.include_paths.first()?.to_path_buf();
+
+    // We already emitted link-search above; returning empty lib_dirs is fine.
+    Some((vec![], include_dir))
+}
+
+fn try_vcpkg_paths() -> Option<(Vec<PathBuf>, PathBuf)> {
+    let target = env::var("TARGET").ok()?;
+    if !target.contains("windows") {
+        return None;
+    }
+
+    let lib = vcpkg::Config::new()
+        .emit_includes(true)
+        .find_package("openssl")
+        .ok()?;
+
+    // Additional system libs, mirroring previous behavior.
+    println!("cargo:rustc-link-lib=user32");
+    println!("cargo:rustc-link-lib=gdi32");
+    println!("cargo:rustc-link-lib=crypt32");
+    println!("cargo:rustc-link-lib=advapi32");
+
+    let include_dir = lib.include_paths.first()?.to_path_buf();
+    let lib_dirs = lib.link_paths.clone();
+
+    Some((lib_dirs, include_dir))
+}
+
+fn execute_command_and_get_output(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(cmd).args(args).output();
+    if let Ok(ref r1) = out
+        && r1.status.success()
+    {
+        let r2 = String::from_utf8(r1.stdout.clone());
+        if let Ok(r3) = r2 {
+            return Some(r3.trim().to_string());
+        }
+    }
+
+    None
+}

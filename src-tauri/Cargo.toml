@@ -58,3 +58,6 @@ tauri-plugin-updater = { version = "2", optional = true }
 nab138_icloud_auth = { path = "../vendored/nab138_icloud_auth" }
 # Vendored to present an Android client info to Apple (-80045 since 2026-10-12).
 nab138_omnisette = { path = "../vendored/nab138_omnisette" }
+# Vendored to sign each app extension with its own profile and entitlements
+# (ZSignOptions::with_bundle); sign_ipa and the rest of its API are unchanged.
+zsign-rust = { path = "../vendored/zsign-rust" }

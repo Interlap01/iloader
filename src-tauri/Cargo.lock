@@ -7251,8 +7251,6 @@ dependencies = [
 [[package]]
 name = "zsign-rust"
 version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f246eecd6b89f0ba582563ec68049f1b6f3498c455d78940355d0cfb09b38379"
 dependencies = [
  "bindgen",
  "cc",
