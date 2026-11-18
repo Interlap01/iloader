@@ -117,16 +117,14 @@ impl AnisetteData {
         plist
     }
 
+    // Header names match whatever their case; values go out exactly as given.
+    // Since 2026-11-17 Apple's edge answers 403 to a lowercased
+    // X-MMe-Client-Info (same fix as khcrysalis/Impactor#317).
     pub fn get_header(&self, header: &str) -> Result<String, Error> {
-        let headers = self
-            .generate_headers(true, true, true)
-            .iter()
-            .map(|(k, v)| (k.to_lowercase(), v.to_lowercase()))
-            .collect::<HashMap<String, String>>();
-
-        match headers.get(&header.to_lowercase()) {
-            Some(v) => Ok(v.to_string()),
-            None => Err(Error::Parse),
-        }
+        self.generate_headers(true, true, true)
+            .into_iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(header))
+            .map(|(_, value)| value)
+            .ok_or(Error::Parse)
     }
 }
