@@ -207,14 +207,17 @@ impl AnisetteClient {
         // some accounts with -23782 "A Mac with macOS version 10.13 or later
         // is required" (since 2026-10-24). Report a current Mac instead, as
         // upstream iloader 2.4.1 does until the servers catch up. Windows
-        // and Android identities go out as reported.
+        // and Android identities go out as reported. The OS is named "Mac OS
+        // X", as macOS's own frameworks still do: since 2026-11-19 Apple's
+        // edge answers HTTP 503 to any client info naming "macOS". The pair is
+        // the one verified end to end in upstream iloader #1203 (2026-11-21).
         let client_info = if client_info.client_info.contains("<Mac OS X;") {
             AnisetteClientInfo {
                 client_info: obf!(
-                    "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
+                    "<MacBookAir10,1> <Mac OS X;27.3;26C5035r> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
                 )
                 .to_string(),
-                user_agent: obf!("akd/1.0 CFNetwork/811.5.4").to_string(),
+                user_agent: obf!("akd/1.0 CFNetwork/3896.300.31 Darwin/27.3.0").to_string(),
             }
         } else {
             client_info
@@ -222,17 +225,24 @@ impl AnisetteClient {
         Ok(AnisetteClient { client_info, url })
     }
 
-    /// The anisette state file for this identity's platform: a state
-    /// provisioned under one identity is not valid under another.
-    fn state_file(&self) -> &'static str {
-        let info = self.client_info.client_info.as_str();
-        if info.contains("<Windows;") {
-            "windows_state.plist"
-        } else if info.contains("<Android;") {
-            "android_state.plist"
+    /// The anisette state file for this identity: a machine provisioned
+    /// under one identity is not valid under another. Apple refuses a login
+    /// that presents a machine provisioned under an older client info with
+    /// -22410 before the password is checked (2026-11-22), so each identity
+    /// gets its own file and a new identity provisions a new machine.
+    fn state_file(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let info = &self.client_info;
+        let platform = if info.client_info.contains("<Windows;") {
+            "windows"
+        } else if info.client_info.contains("<Android;") {
+            "android"
         } else {
-            "macos_state.plist"
-        }
+            "macos"
+        };
+        let sum = Sha256::digest(format!("{}\n{}", info.client_info, info.user_agent).as_bytes());
+        let id: String = sum[..4].iter().map(|b| format!("{:02x}", b)).collect();
+        format!("{}_state_{}.plist", platform, id)
     }
 
     fn build_apple_request(
