@@ -1298,6 +1298,76 @@ async fn sign_ipa(
     std::fs::write(&profile_path, &provisioning_profile.encoded_profile)?;
     out.success("Provisioning profile saved");
 
+    // App extensions (widgets, share extensions): iOS refuses an app whose
+    // extension's ID does not start with the app's, so each takes the app's
+    // new ID as its prefix and gets an App ID and a profile of its own, as
+    // isideload's sideload does.
+    let mut extension_profiles: Vec<(String, std::path::PathBuf)> = Vec::new();
+    let plug_ins = app_dir.join("PlugIns");
+    if plug_ins.is_dir() {
+        for entry in std::fs::read_dir(&plug_ins)?.filter_map(Result::ok) {
+            let ext_dir = entry.path();
+            if !ext_dir.extension().is_some_and(|e| e == "appex") {
+                continue;
+            }
+            let ext_plist_path = ext_dir.join("Info.plist");
+            let mut ext_dict = plist::Value::from_file(&ext_plist_path)?
+                .into_dictionary()
+                .ok_or("an app extension's Info.plist is not a dictionary")?;
+            let ext_id = ext_dict
+                .get("CFBundleIdentifier")
+                .and_then(|v| v.as_string())
+                .ok_or("an app extension has no bundle identifier")?
+                .to_string();
+            let new_ext_id = if ext_id.starts_with(&format!("{}.", new_bundle_id)) {
+                ext_id.clone()
+            } else if let Some(rest) = ext_id.strip_prefix(&format!("{}.", bundle_id)) {
+                format!("{}.{}", new_bundle_id, rest)
+            } else {
+                let msg = format!(
+                    "the app extension {} does not start with the app's bundle identifier {}",
+                    ext_id, bundle_id
+                );
+                out.error(&msg);
+                std::fs::remove_dir_all(&temp_dir)?;
+                return Err(msg.into());
+            };
+            out.info(&format!("Extension: {} -> {}", ext_id, new_ext_id));
+
+            let ids = dev_session.list_app_ids(DeveloperDeviceType::Ios, &team).await?;
+            if !ids.app_ids.iter().any(|a| a.identifier == new_ext_id) {
+                let ext_name = ext_dict
+                    .get("CFBundleName")
+                    .or(ext_dict.get("CFBundleDisplayName"))
+                    .and_then(|v| v.as_string())
+                    .unwrap_or("Extension")
+                    .to_string();
+                out.info(&format!("Registering App ID: {}", new_ext_id));
+                dev_session
+                    .add_app_id(DeveloperDeviceType::Ios, &team, &ext_name, &new_ext_id)
+                    .await?;
+            }
+            let ids = dev_session.list_app_ids(DeveloperDeviceType::Ios, &team).await?;
+            let ext_app_id = ids
+                .app_ids
+                .iter()
+                .find(|a| a.identifier == new_ext_id)
+                .ok_or("Failed to find the extension's registered App ID")?;
+            let ext_profile = dev_session
+                .download_team_provisioning_profile(DeveloperDeviceType::Ios, &team, ext_app_id)
+                .await?;
+            let ext_profile_path = config_dir.join(format!("{}.mobileprovision", new_ext_id));
+            std::fs::write(&ext_profile_path, &ext_profile.encoded_profile)?;
+
+            ext_dict.insert(
+                "CFBundleIdentifier".to_string(),
+                plist::Value::String(new_ext_id.clone()),
+            );
+            plist::to_file_xml(&ext_plist_path, &plist::Value::Dictionary(ext_dict))?;
+            extension_profiles.push((new_ext_id, ext_profile_path));
+        }
+    }
+
     // Update Info.plist with new bundle ID
     let mut info_dict = info_plist.into_dictionary().unwrap();
     info_dict.insert(
@@ -1308,14 +1378,17 @@ async fn sign_ipa(
 
     // Step 7: Sign with zsign
     out.progress(7, 7, "Signing app");
-    if let Err(e) = ZSignOptions::new(app_dir.to_str().unwrap())
+    let mut options = ZSignOptions::new(app_dir.to_str().unwrap())
         .with_cert_file(cert.get_certificate_file_path().to_str().unwrap())
         .with_pkey_file(cert.get_private_key_file_path().to_str().unwrap())
         .with_prov_file(profile_path.to_str().unwrap())
         .with_force()
         .with_disable_cache()
-        .with_quiet()
-        .sign() {
+        .with_quiet();
+    for (id, prov) in &extension_profiles {
+        options = options.with_bundle(id.clone(), prov.to_str().unwrap().to_string(), None);
+    }
+    if let Err(e) = options.sign() {
         out.error(&format!("Signing failed: {}", e));
         std::fs::remove_dir_all(&temp_dir)?;
         return Err(format!("Signing failed: {}", e).into());
